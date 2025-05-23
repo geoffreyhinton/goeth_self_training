@@ -53,4 +53,6 @@ func RlpEncode(object interface{}) string {
 }
 
 type RlpSerializer interface {
+	MarshalRls() []byte
+	UnmarshalRls([]byte)
 }
