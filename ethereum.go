@@ -22,12 +22,14 @@ func main() {
 		"SET 255 15",
 		"JMP 255",
 	})
-	
+
 	tx2 := NewTransaction(0x0, 20, []string{"SET 10 6", "LD 10 10"})
 
 	blck := NewBlock([]*Transaction{tx2, tx})
   
 	bm.ProcessBlock( blck )
   
-	fmt.Printf("rlp encoded Tx %q\n", tx.Serialize())	
+	//fmt.Printf("rlp encoded Tx %q\n", tx.MarshalRlp())
+	fmt.Printf("block enc %q\n", blck.MarshalRlp())
+	fmt.Printf("block hash %q\n", blck.Hash())
 }
