@@ -27,3 +27,10 @@ func TestEncode(t *testing.T) {
   dec,_ = Decode(bytes, 0)
   fmt.Printf("raw: %v encoded: %q == %v\n", dec, slice, strs)
 }
+
+func BenchmarkEncodeDecode(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		bytes := Encode([]string{"dog", "god", "cat"})
+		Decode(bytes, 0)
+	}
+}
