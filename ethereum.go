@@ -1,14 +1,11 @@
 package main
 
-import (
-	"fmt"
-)
-
 func main() {
 	InitFees()
-	bm := newBlockManager()
 
-	tx := NewTransaction(0x0, 20, []string{
+	bm := NewBlockManager()
+
+	tx := NewTransaction("\x00", 20, []string{
 		"SET 10 6",
 		"LD 10 10",
 		"LT 10 1 20",
@@ -22,14 +19,17 @@ func main() {
 		"SET 255 15",
 		"JMP 255",
 	})
+	txData := tx.MarshalRlp()
 
-	tx2 := NewTransaction(0x0, 20, []string{"SET 10 6", "LD 10 10"})
+	copyTx := &Transaction{}
+	copyTx.UnmarshalRlp(txData)
+
+	tx2 := NewTransaction("\x00", 20, []string{"SET 10 6", "LD 10 10"})
 
 	blck := NewBlock([]*Transaction{tx2, tx})
-  
-	bm.ProcessBlock( blck )
-  
-	//fmt.Printf("rlp encoded Tx %q\n", tx.MarshalRlp())
-	fmt.Printf("block enc %q\n", blck.MarshalRlp())
-	fmt.Printf("block hash %q\n", blck.Hash())
+
+	bm.ProcessBlock(blck)
+
+	//t := blck.MarshalRlp()
+	//blck.UnmarshalRlp(t)
 }
