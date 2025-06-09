@@ -23,3 +23,13 @@ func Big(num string) *big.Int {
 
 	return n
 }
+
+/*Add commentMore actions
+ * Like big.NewInt(uint64); this takes a byte buffer instead.
+ */
+func BigD(data []byte) *big.Int {
+	n := new(big.Int)
+	n.SetBytes(data)
+
+	return n
+}
