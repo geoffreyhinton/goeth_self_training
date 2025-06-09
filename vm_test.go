@@ -1,7 +1,6 @@
 package main
 
 import (
-	_ "encoding/hex"
 	"fmt"
 	"testing"
 )
@@ -10,7 +9,7 @@ func TestVm(t *testing.T) {
 	db, _ := NewMemDatabase()
 	Db = db
 
-	tx := NewTransaction("\x00", 20, []string{
+	tx := NewTransaction("", 20, []string{
 		"PSH 10",
 	})
 
@@ -19,7 +18,7 @@ func TestVm(t *testing.T) {
 
 	bm := NewBlockManager()
 	bm.ProcessBlock(block)
-	tx1 := &Transaction{}
-	tx1.UnmarshalRlp([]byte(block.state.Get(tx.recipient)))
-	fmt.Println(tx1)
+	contract := block.GetContract(tx.Hash())
+	fmt.Println(contract)
+	fmt.Println("it is", contract.state.Get(string(Encode(0))))
 }
