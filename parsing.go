@@ -10,7 +10,9 @@ import (
 
 var OpCodes = map[string]string{
 	"STOP": "0",
-	"PSH":  "30", // 0x30
+	"PUSH": "48", // 0x30
+	"POP":  "49", // 0x31
+	"LOAD": "54", // 0x36
 	/*
 		"ADD":       "16",  // 0x10
 		"SUB":       "17",  // 0x11
@@ -55,7 +57,7 @@ var OpCodes = map[string]string{
 func CompileInstr(s string) (string, error) {
 	tokens := strings.Split(s, " ")
 	if OpCodes[tokens[0]] == "" {
-		return "", errors.New(fmt.Sprintf("OP not found: %s", tokens[0]))
+		return s, errors.New(fmt.Sprintf("OP not found: %s", tokens[0]))
 	}
 
 	code := OpCodes[tokens[0]] // Replace op codes with the proper numerical equivalent
