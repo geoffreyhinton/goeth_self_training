@@ -2,7 +2,8 @@ package main
 
 import (
 	_ "bytes"
-	_ "fmt"
+	_ "encoding/hex"
+	"fmt"
 	"time"
 )
 
@@ -72,7 +73,8 @@ func CreateBlock(root string, num int, prevHash string, base string, difficulty 
 			contract := NewContract(tx.value, []byte(""))
 			block.state.Update(string(addr), string(contract.MarshalRlp()))
 			for i, val := range tx.data {
-				contract.state.Update(string(Encode(uint32(i))), val)
+				contract.state.Update(string(NumberToBytes(uint64(i), 32)), val)
+				//contract.state.Update(string(Encode(uint32(i))), val)
 			}
 			block.UpdateContract(addr, contract)
 		}
@@ -83,6 +85,10 @@ func CreateBlock(root string, num int, prevHash string, base string, difficulty 
 
 func (block *Block) GetContract(addr []byte) *Contract {
 	data := block.state.Get(string(addr))
+	if data == "" {
+		return nil
+	}
+
 	contract := &Contract{}
 	contract.UnmarshalRlp([]byte(data))
 
@@ -92,7 +98,27 @@ func (block *Block) GetContract(addr []byte) *Contract {
 func (block *Block) UpdateContract(addr []byte, contract *Contract) {
 	block.state.Update(string(addr), string(contract.MarshalRlp()))
 }
-func (block *Block) Update() {
+
+func (block *Block) PayFee(addr []byte, fee uint64) bool {
+	contract := block.GetContract(addr)
+	// If we can't pay the fee return
+	if contract == nil || contract.amount < fee {
+		fmt.Println("Contract has insufficient funds", contract.amount, fee)
+		return false
+	}
+
+	contract.amount -= fee
+	block.state.Update(string(addr), string(contract.MarshalRlp()))
+
+	data := block.state.Get(string(block.coinbase))
+	println(data)
+	// Get the ether (coinbase) and add the fee (gief fee to miner)
+	ether := NewEtherFromData([]byte(data))
+	ether.amount += fee
+
+	block.state.Update(string(block.coinbase), string(ether.MarshalRlp()))
+
+	return true
 }
 
 // Returns a hash of the block
@@ -152,10 +178,9 @@ func (block *Block) UnmarshalRlp(data []byte) {
 				block.coinbase = string(coinbase)
 			}
 
-			// state is header[header[4]
 			if state, ok := header[4].([]uint8); ok {
-				// XXX the database is currently a global variable defined in testing.go
-				// This will eventually go away and the database with grabbed from public server
+				// XXX The database is currently a global variable defined in testing.go
+				// This will eventually go away and the database will grabbed from the public server
 				// interface
 				block.state = NewTrie(Db, string(state))
 			}
