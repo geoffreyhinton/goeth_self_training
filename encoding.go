@@ -44,3 +44,18 @@ func CompactHexDecode(str string) []int {
 
 	return hexSlice
 }
+
+func CompactDecode(str string) []int {
+	base := CompactHexDecode(str)
+	base = base[:len(base)-1]
+	if base[0] >= 2 { // && base[len(base)-1] != 16 {
+		base = append(base, 16)
+	}
+	if base[0]%2 == 1 {
+		base = base[1:]
+	} else {
+		base = base[2:]
+	}
+
+	return base
+}
