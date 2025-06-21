@@ -17,7 +17,7 @@ var StartMining bool
 
 func Init() {
 	flag.BoolVar(&StartConsole, "c", false, "debug and testing console")
-	flag.BoolVar(&StartMining, "mine", false, "start dagger mining")
+	flag.BoolVar(&StartMining, "m", false, "start dagger mining")
 
 	flag.Parse()
 }
