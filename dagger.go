@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"hash"
 	"math/big"
 	"math/rand"
@@ -28,8 +27,6 @@ func (dag *Dagger) Find(obj *big.Int, resChan chan int64) {
 			resChan <- rnd
 			// Notify other threads we've found a valid nonce
 			Found = true
-		} else {
-			fmt.Printf(".")
 		}
 
 		// Break out if found
@@ -41,16 +38,14 @@ func (dag *Dagger) Find(obj *big.Int, resChan chan int64) {
 	resChan <- 0
 }
 
-func (dag *Dagger) Search(diff *big.Int) *big.Int {
+func (dag *Dagger) Search(hash, diff *big.Int) *big.Int {
 	// TODO fix multi threading. Somehow it results in the wrong nonce
 	amountOfRoutines := 1
 
-	dag.hash = big.NewInt(0)
+	dag.hash = hash
 
 	obj := BigPow(2, 256)
 	obj = obj.Div(obj, diff)
-
-	fmt.Println("diff", diff, "< objective", obj)
 
 	Found = false
 	resChan := make(chan int64, 3)
@@ -67,8 +62,6 @@ func (dag *Dagger) Search(diff *big.Int) *big.Int {
 			res = r
 		}
 	}
-
-	fmt.Println("\n")
 
 	return big.NewInt(res)
 }
@@ -132,11 +125,7 @@ func (dag *Dagger) Eval(N *big.Int) *big.Int {
 	sha.Reset()
 	ret := new(big.Int)
 
-	//doneChan := make(chan bool, 3)
-
 	for k := 0; k < 4; k++ {
-		//go func(_k int) {
-		_k := k
 		d := sha3.NewKeccak224()
 		b := new(big.Int)
 
@@ -144,19 +133,13 @@ func (dag *Dagger) Eval(N *big.Int) *big.Int {
 		d.Write(dag.hash.Bytes())
 		d.Write(dag.xn.Bytes())
 		d.Write(N.Bytes())
-		d.Write(big.NewInt(int64(_k)).Bytes())
+		d.Write(big.NewInt(int64(k)).Bytes())
 
 		b.SetBytes(Sum(d))
 		pk := (b.Uint64() & 0x1ffffff)
 
 		sha.Write(dag.Node(9, pk).Bytes())
-		//doneChan <- true
-		//}(k)
 	}
-
-	//for k := 0; k < 4; k++ {
-	//  <- doneChan
-	//}
 
 	return ret.SetBytes(Sum(sha))
 }
