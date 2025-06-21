@@ -102,7 +102,7 @@ func (vm *Vm) ProcContract(tx *Transaction, block *Block, cb TxCallback) {
 
 	Pow256 := BigPow(2, 256)
 
-	fmt.Printf("#   op   arg\n")
+	// fmt.Printf("#   op   arg\n")
 out:
 	for {
 		// The base big int for all calculations. Use this for any results.
@@ -117,7 +117,7 @@ out:
 		}
 
 		if Debug {
-			fmt.Printf("%-3d %-4d\n", pc, op)
+			// fmt.Printf("%-3d %-4d\n", pc, op)
 		}
 
 		switch op {

@@ -4,8 +4,112 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"math/big"
 )
 
+type RlpEncoder struct {
+	rlpData []byte
+}
+
+func NewRlpEncoder() *RlpEncoder {
+	encoder := &RlpEncoder{}
+
+	return encoder
+}
+func (coder *RlpEncoder) EncodeData(rlpData []interface{}) []byte {
+	return nil
+}
+
+// Data attributes are returned by the rlp decoder. The data attributes represents
+// one item within the rlp data structure. It's responsible for all the casting
+// It always returns something valid
+type RlpDataAttribute struct {
+	dataAttrib interface{}
+}
+
+func NewRlpDataAttribute(attrib interface{}) *RlpDataAttribute {
+	return &RlpDataAttribute{dataAttrib: attrib}
+}
+
+func (attr *RlpDataAttribute) Length() int {
+	if data, ok := attr.dataAttrib.([]interface{}); ok {
+		return len(data)
+	}
+
+	return 0
+}
+
+func (attr *RlpDataAttribute) AsUint() uint64 {
+	if value, ok := attr.dataAttrib.(uint8); ok {
+		return uint64(value)
+	} else if value, ok := attr.dataAttrib.(uint16); ok {
+		return uint64(value)
+	} else if value, ok := attr.dataAttrib.(uint32); ok {
+		return uint64(value)
+	} else if value, ok := attr.dataAttrib.(uint64); ok {
+		return value
+	}
+
+	return 0
+}
+
+func (attr *RlpDataAttribute) AsBigInt() *big.Int {
+	if a, ok := attr.dataAttrib.([]byte); ok {
+		return Big(string(a))
+	}
+
+	return big.NewInt(0)
+}
+
+func (attr *RlpDataAttribute) AsString() string {
+	if a, ok := attr.dataAttrib.([]byte); ok {
+		return string(a)
+	}
+
+	return ""
+}
+
+func (attr *RlpDataAttribute) AsBytes() []byte {
+	if a, ok := attr.dataAttrib.([]byte); ok {
+		return a
+	}
+
+	return make([]byte, 0)
+}
+
+// Threat the attribute as a slice
+func (attr *RlpDataAttribute) Get(idx int) *RlpDataAttribute {
+	if d, ok := attr.dataAttrib.([]interface{}); ok {
+		// Guard for oob
+		if len(d) < idx {
+			return NewRlpDataAttribute(nil)
+		}
+
+		return NewRlpDataAttribute(d[idx])
+	}
+
+	// If this wasn't a slice you probably shouldn't be using this function
+	return NewRlpDataAttribute(nil)
+}
+
+type RlpDecoder struct {
+	rlpData interface{}
+}
+
+func NewRlpDecoder(rlpData []byte) *RlpDecoder {
+	decoder := &RlpDecoder{}
+	// Decode the data
+	data, _ := Decode(rlpData, 0)
+	decoder.rlpData = data
+
+	return decoder
+}
+
+func (dec *RlpDecoder) Get(idx int) *RlpDataAttribute {
+	return NewRlpDataAttribute(dec.rlpData).Get(idx)
+}
+
+// / Raw methods
 func BinaryLength(n uint64) uint64 {
 	if n == 0 {
 		return 0
@@ -56,20 +160,25 @@ func Decode(data []byte, pos int) (interface{}, int) {
 	switch {
 	case char < 24:
 		return data[pos], pos + 1
+
 	case char < 56:
 		b := int(data[pos]) - 23
 		return FromBin(data[pos+1 : pos+1+b]), pos + 1 + b
+
 	case char < 64:
 		b := int(data[pos]) - 55
 		b2 := int(FromBin(data[pos+1 : pos+1+b]))
 		return FromBin(data[pos+1+b : pos+1+b+b2]), pos + 1 + b + b2
+
 	case char < 120:
 		b := int(data[pos]) - 64
 		return data[pos+1 : pos+1+b], pos + 1 + b
+
 	case char < 128:
 		b := int(data[pos]) - 119
 		b2 := int(FromBin(data[pos+1 : pos+1+b]))
 		return data[pos+1+b : pos+1+b+b2], pos + 1 + b + b2
+
 	case char < 184:
 		b := int(data[pos]) - 128
 		pos++
@@ -80,6 +189,7 @@ func Decode(data []byte, pos int) (interface{}, int) {
 			slice = append(slice, obj)
 		}
 		return slice, pos
+
 	case char < 192:
 		b := int(data[pos]) - 183
 		//b2 := int(FromBin(data[pos+1 : pos+1+b])) (ref implementation has an unused variable)
@@ -121,6 +231,9 @@ func Encode(object interface{}) []byte {
 			b2 := ToBin(uint64(len(b)), 0)
 			buff.WriteString(string(len(b2)+55) + b2 + b)
 		}
+
+	case *big.Int:
+		buff.Write(Encode(t.String()))
 
 	case string:
 		if len(t) < 56 {

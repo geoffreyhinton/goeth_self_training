@@ -20,7 +20,8 @@ func Testing() {
 
 	copyTx := &Transaction{}
 	copyTx.UnmarshalRlp(txData)
-
+	fmt.Println(tx)
+	fmt.Println(copyTx)
 	tx2 := NewTransaction("\x00", 20, []string{"SET 10 6", "LD 10 10"})
 
 	blck := CreateTestBlock([]*Transaction{tx2, tx})
