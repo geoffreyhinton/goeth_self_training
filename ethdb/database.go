@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"path"
 
-	"github.com/goeth_self_training/ethutil"
+	"github.com/geoffreyhinton/goeth_self_training/ethutil"
 	"github.com/syndtr/goleveldb/leveldb"
 )
 
