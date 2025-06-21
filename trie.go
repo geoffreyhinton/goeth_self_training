@@ -38,6 +38,8 @@ func DecodeNode(data []byte) []string {
 		}
 
 		return strSlice
+	} else {
+		fmt.Printf("It wasn't a []. It's a %T\n", dec)
 	}
 
 	return nil
@@ -71,16 +73,6 @@ func (t *Trie) Get(key string) string {
 /*
  * State functions (shouldn't be needed directly).
  */
-
-// Wrapper around the regular db "Put" which generates a key and value
-func (t *Trie) Put(node interface{}) []byte {
-	enc := Encode(node)
-	sha := Sha256Bin(enc)
-
-	t.db.Put([]byte(sha), enc)
-
-	return sha
-}
 
 // Helper function for printing a node (using fetch, decode and slice printing)
 func (t *Trie) PrintNode(n string) {
@@ -136,6 +128,17 @@ func (t *Trie) UpdateState(node string, key []int, value string) string {
 	}
 
 	return ""
+}
+
+// Wrapper around the regular db "Put" which generates a key and value
+func (t *Trie) Put(node interface{}) []byte {
+	enc := Encode(node)
+	var sha []byte
+	sha = Sha256Bin(enc)
+
+	t.db.Put([]byte(sha), enc)
+
+	return sha
 }
 
 func (t *Trie) InsertState(node string, key []int, value string) string {

@@ -3,7 +3,11 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	_ "fmt"
+	_ "math"
 	"strconv"
+
+	"github.com/obscuren/sha3"
 )
 
 func Uitoa(i uint32) string {
@@ -22,6 +26,14 @@ func Sha256Bin(data []byte) []byte {
 	return hash[:]
 }
 
+func Sha3Bin(data []byte) []byte {
+	d := sha3.NewKeccak224()
+	d.Reset()
+	d.Write(data)
+
+	return d.Sum(nil)
+}
+
 // Helper function for comparing slices
 func CompareIntSlice(a, b []int) bool {
 	if len(a) != len(b) {
@@ -35,6 +47,7 @@ func CompareIntSlice(a, b []int) bool {
 	return true
 }
 
+// Returns the amount of nibbles that match each other from 0 ...
 func MatchingNibbleLength(a, b []int) int {
 	i := 0
 	for CompareIntSlice(a[:i+1], b[:i+1]) && i < len(b) {
@@ -44,4 +57,8 @@ func MatchingNibbleLength(a, b []int) int {
 	//fmt.Println(a, b, i-1)
 
 	return i
+}
+
+func Hex(d []byte) string {
+	return hex.EncodeToString(d)
 }
