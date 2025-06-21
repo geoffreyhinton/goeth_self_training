@@ -74,6 +74,8 @@ func (i *DbInterface) ParseInput(input string) bool {
 			fmt.Println(hex.EncodeToString([]byte(i.trie.root)))
 		case "rawroot":
 			fmt.Println(i.trie.root)
+		case "print":
+			i.db.Print()
 		case "exit", "quit", "q":
 			return false
 		case "help":
