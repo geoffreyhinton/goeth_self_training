@@ -88,9 +88,9 @@ func (dag *Dagger) Node(L uint64, i uint64) *big.Int {
 		m = big.NewInt(3)
 	}
 
-	sha := sha3.NewKeccak224()
+	sha := sha3.NewKeccak256()
 	sha.Reset()
-	d := sha3.NewKeccak224()
+	d := sha3.NewKeccak256()
 	b := new(big.Int)
 	ret := new(big.Int)
 
@@ -121,12 +121,12 @@ func (dag *Dagger) Eval(N *big.Int) *big.Int {
 	pow := BigPow(2, 26)
 	dag.xn = N.Div(N, pow)
 
-	sha := sha3.NewKeccak224()
+	sha := sha3.NewKeccak256()
 	sha.Reset()
 	ret := new(big.Int)
 
 	for k := 0; k < 4; k++ {
-		d := sha3.NewKeccak224()
+		d := sha3.NewKeccak256()
 		b := new(big.Int)
 
 		d.Reset()
