@@ -3,7 +3,7 @@ package ethchain
 import (
 	"math/big"
 
-	"github.com/ethereum/eth-go/ethutil"
+	"github.com/geoffreyhinton/goeth_self_training/ethutil"
 )
 
 type State struct {
