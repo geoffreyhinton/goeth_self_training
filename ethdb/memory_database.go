@@ -3,7 +3,7 @@ package ethdb
 import (
 	"fmt"
 
-	"github.com/goeth_self_training/ethutil"
+	"github.com/geoffreyhinton/goeth_self_training/ethutil"
 )
 
 /*

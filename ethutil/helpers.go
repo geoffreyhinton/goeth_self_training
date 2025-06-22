@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"strconv"
 
-	"code.google.com/p/go.crypto/ripemd160"
 	"github.com/obscuren/sha3"
+	"golang.org/x/crypto/ripemd160"
 )
 
 func Uitoa(i uint32) string {
