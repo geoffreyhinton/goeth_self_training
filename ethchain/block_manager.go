@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/geoffreyhinton/goeth_self_training/ethutil"
-	"github.com/geoffreyhinton/goeth_self_training/ethwire"
 	"github.com/obscuren/secp256k1-go"
 )
 
@@ -20,12 +19,17 @@ type BlockProcessor interface {
 	ProcessBlock(block *Block)
 }
 
+// TODO rename to state manager
 type BlockManager struct {
 	// Mutex for locking the block processor. Blocks can only be handled one at a time
 	mutex sync.Mutex
 
 	// The block chain :)
 	bc *BlockChain
+
+	// States for addresses. You can watch any address
+	// at any given time
+	addrStateStore *AddrStateStore
 
 	// Stack for processing contracts
 	stack *Stack
@@ -59,11 +63,12 @@ func AddTestNetFunds(block *Block) {
 func NewBlockManager(speaker PublicSpeaker) *BlockManager {
 	bm := &BlockManager{
 		//server: s,
-		bc:      NewBlockChain(),
-		stack:   NewStack(),
-		mem:     make(map[string]*big.Int),
-		Pow:     &EasyPow{},
-		Speaker: speaker,
+		bc:             NewBlockChain(),
+		stack:          NewStack(),
+		mem:            make(map[string]*big.Int),
+		Pow:            &EasyPow{},
+		Speaker:        speaker,
+		addrStateStore: NewAddrStateStore(),
 	}
 
 	if bm.bc.CurrentBlock == nil {
@@ -80,6 +85,22 @@ func NewBlockManager(speaker PublicSpeaker) *BlockManager {
 	log.Printf("Last block: %x\n", bm.bc.CurrentBlock.Hash())
 
 	return bm
+}
+
+// Watches any given address and puts it in the address state store
+func (bm *BlockManager) WatchAddr(addr []byte) *AddressState {
+	account := bm.bc.CurrentBlock.GetAddr(addr)
+
+	return bm.addrStateStore.Add(addr, account)
+}
+
+func (bm *BlockManager) GetAddrState(addr []byte) *AddressState {
+	addrState := bm.addrStateStore.Get(addr)
+	if addrState == nil {
+		addrState = bm.WatchAddr(addr)
+	}
+
+	return addrState
 }
 
 func (bm *BlockManager) BlockChain() *BlockChain {
@@ -166,7 +187,7 @@ func (bm *BlockManager) ProcessBlock(block *Block) error {
 		*/
 
 		// Broadcast the valid block back to the wire
-		bm.Speaker.Broadcast(ethwire.MsgBlockTy, []interface{}{block.Value().Val})
+		//bm.Speaker.Broadcast(ethwire.MsgBlockTy, []interface{}{block.Value().Val})
 
 		// If there's a block processor present, pass in the block for further
 		// processing

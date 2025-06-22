@@ -37,6 +37,10 @@ func (db *LDBDatabase) Get(key []byte) ([]byte, error) {
 	return db.db.Get(key, nil)
 }
 
+func (db *LDBDatabase) Delete(key []byte) error {
+	return db.db.Delete(key, nil)
+}
+
 func (db *LDBDatabase) LastKnownTD() []byte {
 	data, _ := db.db.Get([]byte("LastKnownTotalDifficulty"), nil)
 
@@ -53,7 +57,7 @@ func (db *LDBDatabase) Close() {
 }
 
 func (db *LDBDatabase) Print() {
-	iter := db.db.NewIterator(nil)
+	iter := db.db.NewIterator(nil, nil)
 	for iter.Next() {
 		key := iter.Key()
 		value := iter.Value()
