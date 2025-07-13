@@ -1,0 +1,14 @@
+{
+    "go.testEnvVars": {
+        "CGO_CFLAGS": "-I/opt/homebrew/include",
+        "CGO_LDFLAGS": "-L/opt/homebrew/lib -lgmp"
+    },
+    "go.toolsEnvVars": {
+        "CGO_CFLAGS": "-I/opt/homebrew/include",
+        "CGO_LDFLAGS": "-L/opt/homebrew/lib -lgmp"
+    },
+    "go.buildEnvVars": {
+        "CGO_CFLAGS": "-I/opt/homebrew/include",
+        "CGO_LDFLAGS": "-L/opt/homebrew/lib -lgmp"
+    }
+}

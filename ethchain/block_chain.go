@@ -2,7 +2,6 @@ package ethchain
 
 import (
 	"bytes"
-	"fmt"
 	"log"
 	"math"
 	"math/big"
@@ -120,7 +119,6 @@ func (bc *BlockChain) GetChain(hash []byte, amount int) []*Block {
 	var blocks []*Block
 
 	for i := 0; i < amount && block != nil; block = bc.GetBlock(block.PrevHash) {
-		fmt.Println(block)
 		blocks = append([]*Block{block}, blocks...)
 
 		if bytes.Compare(genHash, block.Hash()) == 0 {
@@ -168,7 +166,6 @@ func (bc *BlockChain) Add(block *Block) {
 
 func (bc *BlockChain) GetBlock(hash []byte) *Block {
 	data, _ := ethutil.Config.Db.Get(hash)
-
 	if len(data) == 0 {
 		return nil
 	}

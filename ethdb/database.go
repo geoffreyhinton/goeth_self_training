@@ -12,8 +12,8 @@ type LDBDatabase struct {
 	db *leveldb.DB
 }
 
-func NewLDBDatabase() (*LDBDatabase, error) {
-	dbPath := path.Join(ethutil.Config.ExecPath, "database")
+func NewLDBDatabase(name string) (*LDBDatabase, error) {
+	dbPath := path.Join(ethutil.Config.ExecPath, name)
 
 	// Open the db
 	db, err := leveldb.OpenFile(dbPath, nil)
@@ -41,6 +41,10 @@ func (db *LDBDatabase) Delete(key []byte) error {
 	return db.db.Delete(key, nil)
 }
 
+func (db *LDBDatabase) Db() *leveldb.DB {
+	return db.db
+}
+
 func (db *LDBDatabase) LastKnownTD() []byte {
 	data, _ := db.db.Get([]byte("LastKnownTotalDifficulty"), nil)
 
@@ -49,6 +53,12 @@ func (db *LDBDatabase) LastKnownTD() []byte {
 	}
 
 	return data
+}
+
+func (db *LDBDatabase) GetKeys() []*ethutil.Key {
+	data, _ := db.Get([]byte("KeyRing"))
+
+	return []*ethutil.Key{ethutil.NewKeyFromBytes(data)}
 }
 
 func (db *LDBDatabase) Close() {

@@ -18,6 +18,17 @@ const (
 )
 
 type TxPoolHook chan *Transaction
+type TxMsgTy byte
+
+const (
+	TxPre = iota
+	TxPost
+)
+
+type TxMsg struct {
+	Tx   *Transaction
+	Type TxMsgTy
+}
 
 func FindTx(pool *list.List, finder func(*Transaction, *list.Element) bool) *Transaction {
 	for e := pool.Front(); e != nil; e = e.Next() {
@@ -33,6 +44,10 @@ func FindTx(pool *list.List, finder func(*Transaction, *list.Element) bool) *Tra
 
 type PublicSpeaker interface {
 	Broadcast(msgType ethwire.MsgType, data []interface{})
+}
+
+type TxProcessor interface {
+	ProcessTransaction(tx *Transaction)
 }
 
 // The tx pool a thread safe transaction pool handler. In order to
@@ -55,7 +70,9 @@ type TxPool struct {
 
 	BlockManager *BlockManager
 
-	Hook TxPoolHook
+	SecondaryProcessor TxProcessor
+
+	subscribers []chan TxMsg
 }
 
 func NewTxPool() *TxPool {
@@ -81,8 +98,6 @@ func (pool *TxPool) addTransaction(tx *Transaction) {
 // Process transaction validates the Tx and processes funds from the
 // sender to the recipient.
 func (pool *TxPool) ProcessTransaction(tx *Transaction, block *Block) (err error) {
-	log.Printf("[TXPL] Processing Tx %x\n", tx.Hash())
-
 	defer func() {
 		if r := recover(); r != nil {
 			log.Println(r)
@@ -127,6 +142,11 @@ func (pool *TxPool) ProcessTransaction(tx *Transaction, block *Block) (err error
 
 	block.UpdateAddr(tx.Sender(), sender)
 
+	log.Printf("[TXPL] Processed Tx %x\n", tx.Hash())
+
+	// Notify the subscribers
+	pool.notifySubscribers(TxPost, tx)
+
 	return
 }
 
@@ -140,7 +160,8 @@ func (pool *TxPool) ValidateTransaction(tx *Transaction) error {
 	}
 
 	// Get the sender
-	sender := block.GetAddr(tx.Sender())
+	accountState := pool.BlockManager.GetAddrState(tx.Sender())
+	sender := accountState.Account
 
 	totAmount := new(big.Int).Add(tx.Value, new(big.Int).Mul(TxFee, TxFeeRat))
 	// Make sure there's enough in the sender's account. Having insufficient
@@ -180,9 +201,8 @@ out:
 				// doesn't matter since this is a goroutine
 				pool.addTransaction(tx)
 
-				if pool.Hook != nil {
-					pool.Hook <- tx
-				}
+				// Notify the subscribers
+				pool.notifySubscribers(TxPre, tx)
 			}
 		case <-pool.quit:
 			break out
@@ -225,4 +245,15 @@ func (pool *TxPool) Stop() {
 	close(pool.quit)
 
 	pool.Flush()
+}
+
+func (pool *TxPool) Subscribe(channel chan TxMsg) {
+	pool.subscribers = append(pool.subscribers, channel)
+}
+
+func (pool *TxPool) notifySubscribers(ty TxMsgTy, tx *Transaction) {
+	msg := TxMsg{Type: ty, Tx: tx}
+	for _, subscriber := range pool.subscribers {
+		subscriber <- msg
+	}
 }

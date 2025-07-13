@@ -69,7 +69,7 @@ func TestEncode(t *testing.T) {
 	bytes = Encode(strs)
 	slice := string(bytes)
 	if slice != sliceRes {
-		t.Error("Expected %q, got %q", sliceRes, slice)
+		t.Errorf("Expected %q, got %q", sliceRes, slice)
 	}
 
 	intRes := "\x82\x04\x00"

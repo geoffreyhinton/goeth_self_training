@@ -21,6 +21,11 @@ func (db *MemDatabase) Put(key []byte, value []byte) {
 func (db *MemDatabase) Get(key []byte) ([]byte, error) {
 	return db.db[string(key)], nil
 }
+func (db *MemDatabase) Delete(key []byte) error {
+	delete(db.db, string(key))
+	return nil
+}
+func (db *MemDatabase) GetKeys() []*Key     { return nil }
 func (db *MemDatabase) Print()              {}
 func (db *MemDatabase) Close()              {}
 func (db *MemDatabase) LastKnownTD() []byte { return nil }
@@ -85,7 +90,7 @@ func TestTrieGet(t *testing.T) {
 	trie.Update("cat", LONG_WORD)
 	x := trie.Get("cat")
 	if x != LONG_WORD {
-		t.Error("expected %s, got %s", LONG_WORD, x)
+		t.Errorf("expected %s, got %s", LONG_WORD, x)
 	}
 }
 
@@ -95,7 +100,7 @@ func TestTrieUpdating(t *testing.T) {
 	trie.Update("cat", LONG_WORD+"1")
 	x := trie.Get("cat")
 	if x != LONG_WORD+"1" {
-		t.Error("expected %S, got %s", LONG_WORD+"1", x)
+		t.Errorf("expected %s, got %s", LONG_WORD+"1", x)
 	}
 }
 
@@ -147,4 +152,21 @@ func TestTrieDeleteWithValue(t *testing.T) {
 		t.Errorf("Expected tries to be equal %x : %x", exp, trie.Root)
 	}
 
+}
+
+func TestTrieIterator(t *testing.T) {
+	_, trie := New()
+	trie.Update("c", LONG_WORD)
+	trie.Update("ca", LONG_WORD)
+	trie.Update("cat", LONG_WORD)
+
+	lenBefore := len(trie.cache.nodes)
+	it := trie.NewIterator()
+	if num := it.Purge(); num != 3 {
+		t.Errorf("Expected purge to return 3, got %d", num)
+	}
+
+	if lenBefore == len(trie.cache.nodes) {
+		t.Errorf("Expected cached nodes to be deleted")
+	}
 }

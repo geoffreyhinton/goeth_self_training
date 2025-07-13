@@ -92,12 +92,13 @@ func (bm *BlockManager) WatchAddr(addr []byte) *AddressState {
 }
 
 func (bm *BlockManager) GetAddrState(addr []byte) *AddressState {
-	addrState := bm.addrStateStore.Get(addr)
-	if addrState == nil {
-		addrState = bm.WatchAddr(addr)
+	account := bm.addrStateStore.Get(addr)
+	if account == nil {
+		a := bm.bc.CurrentBlock.GetAddr(addr)
+		account = &AddressState{Nonce: a.Nonce, Account: a}
 	}
 
-	return addrState
+	return account
 }
 
 func (bm *BlockManager) BlockChain() *BlockChain {
@@ -114,7 +115,10 @@ func (bm *BlockManager) ApplyTransactions(block *Block, txs []*Transaction) {
 			if contract := block.GetContract(tx.Recipient); contract != nil {
 				bm.ProcessContract(contract, tx, block)
 			} else {
-				bm.TransactionPool.ProcessTransaction(tx, block)
+				err := bm.TransactionPool.ProcessTransaction(tx, block)
+				if err != nil {
+					ethutil.Config.Log.Infoln("[BMGR]", err)
+				}
 			}
 		}
 	}
@@ -165,29 +169,12 @@ func (bm *BlockManager) ProcessBlock(block *Block) error {
 	if bm.CalculateTD(block) {
 		// Sync the current block's state to the database and cancelling out the deferred Undo
 		bm.bc.CurrentBlock.Sync()
-		// Add the block to the chain
-		bm.bc.Add(block)
-
-		/*
-			ethutil.Config.Db.Put(block.Hash(), block.RlpEncode())
-			bm.bc.CurrentBlock = block
-			bm.LastBlockHash = block.Hash()
-			bm.writeBlockInfo(block)
-		*/
-
-		/*
-			txs := bm.TransactionPool.Flush()
-			var coded = []interface{}{}
-			for _, tx := range txs {
-				err := bm.TransactionPool.ValidateTransaction(tx)
-				if err == nil {
-					coded = append(coded, tx.RlpEncode())
-				}
-			}
-		*/
 
 		// Broadcast the valid block back to the wire
 		//bm.Speaker.Broadcast(ethwire.MsgBlockTy, []interface{}{block.Value().Val})
+
+		// Add the block to the chain
+		bm.bc.Add(block)
 
 		// If there's a block processor present, pass in the block for further
 		// processing
@@ -195,7 +182,7 @@ func (bm *BlockManager) ProcessBlock(block *Block) error {
 			bm.SecondaryBlockProcessor.ProcessBlock(block)
 		}
 
-		log.Printf("[BMGR] Added block #%d (%x)\n", block.BlockInfo().Number, block.Hash())
+		ethutil.Config.Log.Infof("[BMGR] Added block #%d (%x)\n", block.BlockInfo().Number, block.Hash())
 	} else {
 		fmt.Println("total diff failed")
 	}
