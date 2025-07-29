@@ -20,7 +20,12 @@ func (val *Value) String() string {
 }
 
 func NewValue(val interface{}) *Value {
-	return &Value{Val: val}
+	t := val
+	if v, ok := val.(*Value); ok {
+		t = v.Val
+	}
+
+	return &Value{Val: t}
 }
 
 func (val *Value) Type() reflect.Kind {
@@ -149,6 +154,15 @@ func (val *Value) IsStr() bool {
 	return val.Type() == reflect.String
 }
 
+// Special list checking function. Something is considered
+// a list if it's of type []interface{}. The list is usually
+// used in conjunction with rlp decoded streams.
+func (val *Value) IsList() bool {
+	_, ok := val.Val.([]interface{})
+
+	return ok
+}
+
 func (val *Value) IsEmpty() bool {
 	return val.Val == nil || ((val.IsSlice() || val.IsStr()) && val.Len() == 0)
 }
@@ -223,4 +237,33 @@ func (val *Value) Append(v interface{}) *Value {
 	val.Val = append(val.Slice(), v)
 
 	return val
+}
+
+type ValueIterator struct {
+	value        *Value
+	currentValue *Value
+	idx          int
+}
+
+func (val *Value) NewIterator() *ValueIterator {
+	return &ValueIterator{value: val}
+}
+
+func (it *ValueIterator) Next() bool {
+	if it.idx >= it.value.Len() {
+		return false
+	}
+
+	it.currentValue = it.value.Get(it.idx)
+	it.idx++
+
+	return true
+}
+
+func (it *ValueIterator) Value() *Value {
+	return it.currentValue
+}
+
+func (it *ValueIterator) Idx() int {
+	return it.idx
 }
