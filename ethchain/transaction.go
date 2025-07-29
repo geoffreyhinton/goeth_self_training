@@ -1,7 +1,6 @@
 package ethchain
 
 import (
-	"bytes"
 	"math/big"
 
 	"github.com/geoffreyhinton/goeth_self_training/ethutil"
@@ -14,25 +13,23 @@ type Transaction struct {
 	Nonce     uint64
 	Recipient []byte
 	Value     *big.Int
-	Data      []string
-	Memory    []int
+	Gas       *big.Int
+	GasPrice  *big.Int
+	Data      []byte
+	Init      []byte
 	v         byte
 	r, s      []byte
+
+	// Indicates whether this tx is a contract creation transaction
+	contractCreation bool
 }
 
-func NewTransaction(to []byte, value *big.Int, data []string) *Transaction {
-	tx := Transaction{Recipient: to, Value: value}
-	tx.Nonce = 0
-
-	// Serialize the data
-	tx.Data = data
-
-	return &tx
+func NewContractCreationTx(value, gas, gasPrice *big.Int, script []byte, init []byte) *Transaction {
+	return &Transaction{Value: value, Gas: gas, GasPrice: gasPrice, Data: script, Init: init, contractCreation: true}
 }
 
-// XXX Deprecated
-func NewTransactionFromData(data []byte) *Transaction {
-	return NewTransactionFromBytes(data)
+func NewTransactionMessage(to []byte, value, gas, gasPrice *big.Int, data []byte) *Transaction {
+	return &Transaction{Recipient: to, Value: value, GasPrice: gasPrice, Gas: gas, Data: data}
 }
 
 func NewTransactionFromBytes(data []byte) *Transaction {
@@ -50,23 +47,21 @@ func NewTransactionFromValue(val *ethutil.Value) *Transaction {
 }
 
 func (tx *Transaction) Hash() []byte {
-	data := make([]interface{}, len(tx.Data))
-	for i, val := range tx.Data {
-		data[i] = val
+	data := []interface{}{tx.Nonce, tx.Value, tx.GasPrice, tx.Gas, tx.Recipient, tx.Data}
+
+	if tx.contractCreation {
+		data = append(data, tx.Init)
 	}
 
-	preEnc := []interface{}{
-		tx.Nonce,
-		tx.Recipient,
-		tx.Value,
-		data,
-	}
-
-	return ethutil.Sha3Bin(ethutil.Encode(preEnc))
+	return ethutil.Sha3Bin(ethutil.NewValue(data).Encode())
 }
 
 func (tx *Transaction) IsContract() bool {
-	return bytes.Compare(tx.Recipient, ContractAddr) == 0
+	return tx.contractCreation
+}
+
+func (tx *Transaction) CreationAddress() []byte {
+	return tx.Hash()[12:]
 }
 
 func (tx *Transaction) Signature(key []byte) []byte {
@@ -115,17 +110,16 @@ func (tx *Transaction) Sign(privk []byte) error {
 	return nil
 }
 
+// [ NONCE, VALUE, GASPRICE, GAS, TO, DATA, V, R, S ]
+// [ NONCE, VALUE, GASPRICE, GAS, 0, CODE, INIT, V, R, S ]
 func (tx *Transaction) RlpData() interface{} {
-	// Prepare the transaction for serialization
-	return []interface{}{
-		tx.Nonce,
-		tx.Recipient,
-		tx.Value,
-		ethutil.NewSliceValue(tx.Data).Slice(),
-		tx.v,
-		tx.r,
-		tx.s,
+	data := []interface{}{tx.Nonce, tx.Value, tx.GasPrice, tx.Gas, tx.Recipient, tx.Data}
+
+	if tx.contractCreation {
+		data = append(data, tx.Init)
 	}
+
+	return append(data, tx.v, tx.r, tx.s)
 }
 
 func (tx *Transaction) RlpValue() *ethutil.Value {
@@ -142,17 +136,23 @@ func (tx *Transaction) RlpDecode(data []byte) {
 
 func (tx *Transaction) RlpValueDecode(decoder *ethutil.Value) {
 	tx.Nonce = decoder.Get(0).Uint()
-	tx.Recipient = decoder.Get(1).Bytes()
-	tx.Value = decoder.Get(2).BigInt()
+	tx.Value = decoder.Get(1).BigInt()
+	tx.GasPrice = decoder.Get(2).BigInt()
+	tx.Gas = decoder.Get(3).BigInt()
+	tx.Recipient = decoder.Get(4).Bytes()
+	tx.Data = decoder.Get(5).Bytes()
 
-	d := decoder.Get(3)
-	tx.Data = make([]string, d.Len())
-	for i := 0; i < d.Len(); i++ {
-		tx.Data[i] = d.Get(i).Str()
+	// If the list is of length 10 it's a contract creation tx
+	if decoder.Len() == 10 {
+		tx.contractCreation = true
+		tx.Init = decoder.Get(6).Bytes()
+
+		tx.v = byte(decoder.Get(7).Uint())
+		tx.r = decoder.Get(8).Bytes()
+		tx.s = decoder.Get(9).Bytes()
+	} else {
+		tx.v = byte(decoder.Get(6).Uint())
+		tx.r = decoder.Get(7).Bytes()
+		tx.s = decoder.Get(8).Bytes()
 	}
-
-	// TODO something going wrong here
-	tx.v = byte(decoder.Get(4).Uint())
-	tx.r = decoder.Get(5).Bytes()
-	tx.s = decoder.Get(6).Bytes()
 }

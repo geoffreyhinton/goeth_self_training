@@ -42,10 +42,6 @@ func FindTx(pool *list.List, finder func(*Transaction, *list.Element) bool) *Tra
 	return nil
 }
 
-type PublicSpeaker interface {
-	Broadcast(msgType ethwire.MsgType, data []interface{})
-}
-
 type TxProcessor interface {
 	ProcessTransaction(tx *Transaction)
 }
@@ -56,8 +52,7 @@ type TxProcessor interface {
 // pool is being drained or synced for whatever reason the transactions
 // will simple queue up and handled when the mutex is freed.
 type TxPool struct {
-	//server *Server
-	Speaker PublicSpeaker
+	Ethereum EthManager
 	// The mutex for accessing the Tx pool.
 	mutex sync.Mutex
 	// Queueing channel for reading and writing incoming
@@ -68,20 +63,19 @@ type TxPool struct {
 	// The actual pool
 	pool *list.List
 
-	BlockManager *BlockManager
-
 	SecondaryProcessor TxProcessor
 
 	subscribers []chan TxMsg
 }
 
-func NewTxPool() *TxPool {
+func NewTxPool(ethereum EthManager) *TxPool {
 	return &TxPool{
 		//server:    s,
 		mutex:     sync.Mutex{},
 		pool:      list.New(),
 		queueChan: make(chan *Transaction, txPoolQueueSize),
 		quit:      make(chan bool),
+		Ethereum:  ethereum,
 	}
 }
 
@@ -92,12 +86,12 @@ func (pool *TxPool) addTransaction(tx *Transaction) {
 	pool.mutex.Unlock()
 
 	// Broadcast the transaction to the rest of the peers
-	pool.Speaker.Broadcast(ethwire.MsgTxTy, []interface{}{tx.RlpData()})
+	pool.Ethereum.Broadcast(ethwire.MsgTxTy, []interface{}{tx.RlpData()})
 }
 
 // Process transaction validates the Tx and processes funds from the
 // sender to the recipient.
-func (pool *TxPool) ProcessTransaction(tx *Transaction, block *Block) (err error) {
+func (pool *TxPool) ProcessTransaction(tx *Transaction, block *Block, toContract bool) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Println(r)
@@ -105,46 +99,41 @@ func (pool *TxPool) ProcessTransaction(tx *Transaction, block *Block) (err error
 		}
 	}()
 	// Get the sender
-	sender := block.GetAddr(tx.Sender())
+	sender := block.state.GetAccount(tx.Sender())
+
+	if sender.Nonce != tx.Nonce {
+		return fmt.Errorf("[TXPL] Invalid account nonce, state nonce is %d transaction nonce is %d instead", sender.Nonce, tx.Nonce)
+	}
 
 	// Make sure there's enough in the sender's account. Having insufficient
 	// funds won't invalidate this transaction but simple ignores it.
 	totAmount := new(big.Int).Add(tx.Value, new(big.Int).Mul(TxFee, TxFeeRat))
 	if sender.Amount.Cmp(totAmount) < 0 {
-		return errors.New("Insufficient amount in sender's account")
-	}
-
-	if sender.Nonce != tx.Nonce {
-		if ethutil.Config.Debug {
-			return fmt.Errorf("Invalid nonce %d(%d) continueing anyway", tx.Nonce, sender.Nonce)
-		} else {
-			return fmt.Errorf("Invalid nonce %d(%d)", tx.Nonce, sender.Nonce)
-		}
+		return fmt.Errorf("[TXPL] Insufficient amount in sender's (%x) account", tx.Sender())
 	}
 
 	// Get the receiver
-	receiver := block.GetAddr(tx.Recipient)
+	receiver := block.state.GetAccount(tx.Recipient)
 	sender.Nonce += 1
 
 	// Send Tx to self
 	if bytes.Compare(tx.Recipient, tx.Sender()) == 0 {
 		// Subtract the fee
-		sender.Amount.Sub(sender.Amount, new(big.Int).Mul(TxFee, TxFeeRat))
+		sender.SubAmount(new(big.Int).Mul(TxFee, TxFeeRat))
 	} else {
 		// Subtract the amount from the senders account
-		sender.Amount.Sub(sender.Amount, totAmount)
+		sender.SubAmount(totAmount)
 
 		// Add the amount to receivers account which should conclude this transaction
-		receiver.Amount.Add(receiver.Amount, tx.Value)
+		receiver.AddAmount(tx.Value)
 
-		block.UpdateAddr(tx.Recipient, receiver)
+		block.state.UpdateStateObject(receiver)
 	}
 
-	block.UpdateAddr(tx.Sender(), sender)
+	block.state.UpdateStateObject(sender)
 
 	log.Printf("[TXPL] Processed Tx %x\n", tx.Hash())
 
-	// Notify the subscribers
 	pool.notifySubscribers(TxPost, tx)
 
 	return
@@ -153,21 +142,21 @@ func (pool *TxPool) ProcessTransaction(tx *Transaction, block *Block) (err error
 func (pool *TxPool) ValidateTransaction(tx *Transaction) error {
 	// Get the last block so we can retrieve the sender and receiver from
 	// the merkle trie
-	block := pool.BlockManager.BlockChain().CurrentBlock
+	block := pool.Ethereum.BlockChain().CurrentBlock
 	// Something has gone horribly wrong if this happens
 	if block == nil {
-		return errors.New("No last block on the block chain")
+		return errors.New("[TXPL] No last block on the block chain")
 	}
 
 	// Get the sender
-	accountState := pool.BlockManager.GetAddrState(tx.Sender())
-	sender := accountState.Account
+	accountState := pool.Ethereum.StateManager().GetAddrState(tx.Sender())
+	sender := accountState.Object
 
 	totAmount := new(big.Int).Add(tx.Value, new(big.Int).Mul(TxFee, TxFeeRat))
 	// Make sure there's enough in the sender's account. Having insufficient
 	// funds won't invalidate this transaction but simple ignores it.
 	if sender.Amount.Cmp(totAmount) < 0 {
-		return fmt.Errorf("Insufficient amount in sender's (%x) account", tx.Sender())
+		return fmt.Errorf("[TXPL] Insufficient amount in sender's (%x) account", tx.Sender())
 	}
 
 	// Increment the nonce making each tx valid only once to prevent replay
@@ -197,9 +186,11 @@ out:
 					log.Println("Validating Tx failed", err)
 				}
 			} else {
-				// Call blocking version. At this point it
-				// doesn't matter since this is a goroutine
+				// Call blocking version.
 				pool.addTransaction(tx)
+
+				// Notify the subscribers
+				pool.Ethereum.Reactor().Post("newTx", tx)
 
 				// Notify the subscribers
 				pool.notifySubscribers(TxPre, tx)
@@ -214,7 +205,7 @@ func (pool *TxPool) QueueTransaction(tx *Transaction) {
 	pool.queueChan <- tx
 }
 
-func (pool *TxPool) Flush() []*Transaction {
+func (pool *TxPool) CurrentTransactions() []*Transaction {
 	pool.mutex.Lock()
 	defer pool.mutex.Unlock()
 
@@ -228,6 +219,12 @@ func (pool *TxPool) Flush() []*Transaction {
 		i++
 	}
 
+	return txList
+}
+
+func (pool *TxPool) Flush() []*Transaction {
+	txList := pool.CurrentTransactions()
+
 	// Recreate a new list all together
 	// XXX Is this the fastest way?
 	pool.pool = list.New()
@@ -240,11 +237,11 @@ func (pool *TxPool) Start() {
 }
 
 func (pool *TxPool) Stop() {
-	log.Println("[TXP] Stopping...")
-
 	close(pool.quit)
 
 	pool.Flush()
+
+	log.Println("[TXP] Stopped")
 }
 
 func (pool *TxPool) Subscribe(channel chan TxMsg) {
