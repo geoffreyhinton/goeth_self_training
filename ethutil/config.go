@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/user"
 	"path"
+	"runtime"
 )
 
+// Log types available
 type LogType byte
 
 const (
@@ -15,21 +17,24 @@ const (
 	LogTypeFile  = 2
 )
 
-// Config struct isn't exposed
+// Config struct
 type config struct {
 	Db Database
 
-	Log      *Logger
-	ExecPath string
-	Debug    bool
-	Ver      string
-	Pubkey   []byte
-	Seed     bool
+	Log          *Logger
+	ExecPath     string
+	Debug        bool
+	Ver          string
+	ClientString string
+	Pubkey       []byte
+	Seed         bool
 }
 
 var Config *config
 
-// Read config doesn't read anything yet.
+// Read config
+//
+// Initialize the global Config variable with default settings
 func ReadConfig(base string) *config {
 	if Config == nil {
 		usr, _ := user.Current()
@@ -46,11 +51,17 @@ func ReadConfig(base string) *config {
 			}
 		}
 
-		Config = &config{ExecPath: path, Debug: true, Ver: "0.3.0"}
+		Config = &config{ExecPath: path, Debug: true, Ver: "0.5"}
 		Config.Log = NewLogger(LogFile|LogStd, LogLevelDebug)
+		Config.SetClientString("/Ethereum(G)")
 	}
 
 	return Config
+}
+
+// Set client string
+func (c *config) SetClientString(str string) {
+	Config.ClientString = fmt.Sprintf("%s nv%s/%s", str, c.Ver, runtime.GOOS)
 }
 
 type LoggerType byte
