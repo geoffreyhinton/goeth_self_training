@@ -37,11 +37,13 @@ type Ethereum struct {
 	// DB interface
 	//db *ethdb.LDBDatabase
 	db ethutil.Database
-	// Block manager for processing new blocks and managing the block chain
-	BlockManager *ethchain.BlockManager
+	// State manager for processing new blocks and managing the over all states
+	stateManager *ethchain.StateManager
 	// The transaction pool. Transaction can be pushed on this pool
 	// for later including in the blocks
-	TxPool *ethchain.TxPool
+	txPool *ethchain.TxPool
+	// The canonical chain
+	blockChain *ethchain.BlockChain
 	// Peers (NYI)
 	peers *list.List
 	// Nonce
@@ -59,6 +61,10 @@ type Ethereum struct {
 
 	// Specifies the desired amount of maximum peers
 	MaxPeers int
+
+	reactor *ethutil.ReactorEngine
+
+	RpcServer *etherpc.JsonRpcServer
 }
 
 func New(caps Caps, usePnp bool) (*Ethereum, error) {
@@ -88,17 +94,32 @@ func New(caps Caps, usePnp bool) (*Ethereum, error) {
 		serverCaps:   caps,
 		nat:          nat,
 	}
-	ethereum.TxPool = ethchain.NewTxPool()
-	ethereum.TxPool.Speaker = ethereum
-	ethereum.BlockManager = ethchain.NewBlockManager(ethereum)
+	ethereum.reactor = ethutil.NewReactorEngine()
 
-	ethereum.TxPool.BlockManager = ethereum.BlockManager
-	ethereum.BlockManager.TransactionPool = ethereum.TxPool
+	ethereum.txPool = ethchain.NewTxPool(ethereum)
+	ethereum.blockChain = ethchain.NewBlockChain(ethereum)
+	ethereum.stateManager = ethchain.NewStateManager(ethereum)
 
 	// Start the tx pool
-	ethereum.TxPool.Start()
+	ethereum.txPool.Start()
 
 	return ethereum, nil
+}
+
+func (s *Ethereum) Reactor() *ethutil.ReactorEngine {
+	return s.reactor
+}
+
+func (s *Ethereum) BlockChain() *ethchain.BlockChain {
+	return s.blockChain
+}
+
+func (s *Ethereum) StateManager() *ethchain.StateManager {
+	return s.stateManager
+}
+
+func (s *Ethereum) TxPool() *ethchain.TxPool {
+	return s.txPool
 }
 
 func (s *Ethereum) AddPeer(conn net.Conn) {
@@ -253,20 +274,45 @@ func (s *Ethereum) Start() {
 
 	if ethutil.Config.Seed {
 		ethutil.Config.Log.Debugln("Seeding")
-		// Testnet seed bootstrapping
-		resp, err := http.Get("http://www.ethereum.org/servers.poc3.txt")
-		if err != nil {
-			log.Println("Fetching seed failed:", err)
-			return
-		}
-		defer resp.Body.Close()
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Println("Reading seed failed:", err)
-			return
-		}
+		// DNS Bootstrapping
+		_, nodes, err := net.LookupSRV("eth", "tcp", "ethereum.org")
+		if err == nil {
+			peers := []string{}
+			// Iterate SRV nodes
+			for _, n := range nodes {
+				target := n.Target
+				port := strconv.Itoa(int(n.Port))
+				// Resolve target to ip (Go returns list, so may resolve to multiple ips?)
+				addr, err := net.LookupHost(target)
+				if err == nil {
+					for _, a := range addr {
+						// Build string out of SRV port and Resolved IP
+						peer := net.JoinHostPort(a, port)
+						log.Println("Found DNS Bootstrap Peer:", peer)
+						peers = append(peers, peer)
+					}
+				} else {
+					log.Println("Couldn't resolve :", target)
+				}
+			}
+			// Connect to Peer list
+			s.ProcessPeerList(peers)
+		} else {
+			// Fallback to servers.poc3.txt
+			resp, err := http.Get("http://www.ethereum.org/servers.poc3.txt")
+			if err != nil {
+				log.Println("Fetching seed failed:", err)
+				return
+			}
+			defer resp.Body.Close()
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				log.Println("Reading seed failed:", err)
+				return
+			}
 
-		s.ConnectToPeer(string(body))
+			s.ConnectToPeer(string(body))
+		}
 	}
 }
 
@@ -293,10 +339,11 @@ func (s *Ethereum) Stop() {
 
 	close(s.quit)
 
-	s.TxPool.Stop()
-	s.BlockManager.Stop()
+	s.RpcServer.Stop()
+	s.txPool.Stop()
+	s.stateManager.Stop()
 
-	s.shutdownChan <- true
+	close(s.shutdownChan)
 }
 
 // This function will wait for a shutdown and resumes main thread execution
@@ -307,7 +354,7 @@ func (s *Ethereum) WaitForShutdown() {
 func (s *Ethereum) upnpUpdateThread() {
 	// Go off immediately to prevent code duplication, thereafter we renew
 	// lease every 15 minutes.
-	timer := time.NewTimer(0 * time.Second)
+	timer := time.NewTimer(5 * time.Minute)
 	lport, _ := strconv.ParseInt(s.Port, 10, 16)
 	first := true
 out:

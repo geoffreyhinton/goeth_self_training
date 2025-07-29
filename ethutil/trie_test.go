@@ -91,7 +91,7 @@ func TestTrieGet(t *testing.T) {
 	trie.Update("cat", LONG_WORD)
 	x := trie.Get("cat")
 	if x != LONG_WORD {
-		t.Error("expected %s, got %s", LONG_WORD, x)
+		t.Errorf("expected %s, got %s", LONG_WORD, x)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestTrieUpdating(t *testing.T) {
 	trie.Update("cat", LONG_WORD+"1")
 	x := trie.Get("cat")
 	if x != LONG_WORD+"1" {
-		t.Error("expected %S, got %s", LONG_WORD+"1", x)
+		t.Errorf("expected %s, got %s", LONG_WORD+"1", x)
 	}
 }
 
