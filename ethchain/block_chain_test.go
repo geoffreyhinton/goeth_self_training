@@ -11,12 +11,16 @@ import (
 
 // Implement our EthTest Manager
 type TestManager struct {
-	stateManager *StateManager
-	reactor      *ethutil.ReactorEngine
+	reactor *ethutil.ReactorEngine
 
-	txPool     *TxPool
-	blockChain *BlockChain
-	Blocks     []*Block
+	txPool *TxPool
+	Blocks []*Block
+
+	stateManager *StateManager
+	blockChain   *BlockChain
+	peerCount    int
+	isListening  bool
+	isMining     bool
 }
 
 func (s *TestManager) BlockChain() *BlockChain {
@@ -37,20 +41,33 @@ func (tm *TestManager) Reactor() *ethutil.ReactorEngine {
 
 // PeerCount implements the EthManager interface.
 func (tm *TestManager) PeerCount() int {
-	return 1
+	return tm.peerCount
 }
 
 // IsListening implements the EthManager interface.
 func (tm *TestManager) IsListening() bool {
-	return true
+	return tm.isListening
 }
 
-// IsListening implements the EthManager interface.
 func (tm *TestManager) IsMining() bool {
-	return true
+	return tm.isMining
 }
+
+// Add the missing Broadcast method
 func (tm *TestManager) Broadcast(msgType ethwire.MsgType, data []interface{}) {
-	fmt.Println("Broadcast not implemented")
+	// For testing purposes, we can either:
+	// 1. Do nothing (no-op implementation)
+	// 2. Log the broadcast
+	// 3. Store broadcasts for testing verification
+
+	// Option 1: No-op (simplest for testing)
+	// Do nothing
+
+	// Option 2: Log for debugging
+	fmt.Printf("TestManager: Broadcasting message type %v with data: %v\n", msgType, data)
+
+	// Option 3: You could store broadcasts in a slice for test verification
+	// tm.broadcasts = append(tm.broadcasts, BroadcastMessage{msgType, data})
 }
 
 func NewTestManager() *TestManager {
