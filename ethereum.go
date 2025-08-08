@@ -2,18 +2,21 @@ package eth
 
 import (
 	"container/list"
+	"fmt"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/geoffreyhinton/goeth_self_training/ethchain"
 	"github.com/geoffreyhinton/goeth_self_training/ethdb"
-	"github.com/geoffreyhinton/goeth_self_training/etherpc"
+	"github.com/geoffreyhinton/goeth_self_training/ethrpc"
 	"github.com/geoffreyhinton/goeth_self_training/ethutil"
 	"github.com/geoffreyhinton/goeth_self_training/ethwire"
 )
@@ -63,9 +66,13 @@ type Ethereum struct {
 	// Specifies the desired amount of maximum peers
 	MaxPeers int
 
+	Mining bool
+
+	listening bool
+
 	reactor *ethutil.ReactorEngine
 
-	RpcServer *etherpc.JsonRpcServer
+	RpcServer *ethrpc.JsonRpcServer
 }
 
 func New(caps Caps, usePnp bool) (*Ethereum, error) {
@@ -123,12 +130,30 @@ func (s *Ethereum) TxPool() *ethchain.TxPool {
 	return s.txPool
 }
 
+func (s *Ethereum) ServerCaps() Caps {
+	return s.serverCaps
+}
+func (s *Ethereum) IsMining() bool {
+	return s.Mining
+}
+func (s *Ethereum) PeerCount() int {
+	return s.peers.Len()
+}
+
+func (s *Ethereum) IsListening() bool {
+	return s.listening
+}
+
 func (s *Ethereum) AddPeer(conn net.Conn) {
 	peer := NewPeer(conn, s, true)
 
-	if peer != nil && s.peers.Len() < s.MaxPeers {
-		s.peers.PushBack(peer)
-		peer.Start()
+	if peer != nil {
+		if s.peers.Len() < s.MaxPeers {
+			s.peers.PushBack(peer)
+			peer.Start()
+		} else {
+			ethutil.Config.Log.Debugf("[SERV] Max connected peers reached. Not adding incoming peer.")
+		}
 	}
 }
 
@@ -143,15 +168,51 @@ func (s *Ethereum) ConnectToPeer(addr string) error {
 	if s.peers.Len() < s.MaxPeers {
 		var alreadyConnected bool
 
+		ahost, _, _ := net.SplitHostPort(addr)
+		var chost string
+
+		ips, err := net.LookupIP(ahost)
+
+		if err != nil {
+			return err
+		} else {
+			// If more then one ip is available try stripping away the ipv6 ones
+			if len(ips) > 1 {
+				var ipsv4 []net.IP
+				// For now remove the ipv6 addresses
+				for _, ip := range ips {
+					if strings.Contains(ip.String(), "::") {
+						continue
+					} else {
+						ipsv4 = append(ipsv4, ip)
+					}
+				}
+				if len(ipsv4) == 0 {
+					return fmt.Errorf("[SERV] No IPV4 addresses available for hostname")
+				}
+
+				// Pick a random ipv4 address, simulating round-robin DNS.
+				rand.Seed(time.Now().UTC().UnixNano())
+				i := rand.Intn(len(ipsv4))
+				chost = ipsv4[i].String()
+			} else {
+				if len(ips) == 0 {
+					return fmt.Errorf("[SERV] No IPs resolved for the given hostname")
+					return nil
+				}
+				chost = ips[0].String()
+			}
+		}
+
 		eachPeer(s.peers, func(p *Peer, v *list.Element) {
 			if p.conn == nil {
 				return
 			}
 			phost, _, _ := net.SplitHostPort(p.conn.RemoteAddr().String())
-			ahost, _, _ := net.SplitHostPort(addr)
 
-			if phost == ahost {
+			if phost == chost {
 				alreadyConnected = true
+				ethutil.Config.Log.Debugf("[SERV] Peer %s already added.\n", chost)
 				return
 			}
 		})
@@ -254,12 +315,14 @@ func (s *Ethereum) ReapDeadPeerHandler() {
 }
 
 // Start the ethereum
-func (s *Ethereum) Start() {
+func (s *Ethereum) Start(seed bool) {
 	// Bind to addr and port
 	ln, err := net.Listen("tcp", ":"+s.Port)
 	if err != nil {
 		log.Println("Connection listening disabled. Acting as client")
+		s.listening = false
 	} else {
+		s.listening = true
 		// Starting accepting connections
 		ethutil.Config.Log.Infoln("Ready and accepting connections")
 		// Start the peer handler
@@ -273,47 +336,64 @@ func (s *Ethereum) Start() {
 	// Start the reaping processes
 	go s.ReapDeadPeerHandler()
 
-	if ethutil.Config.Seed {
-		ethutil.Config.Log.Debugln("Seeding")
-		// DNS Bootstrapping
-		_, nodes, err := net.LookupSRV("eth", "tcp", "ethereum.org")
-		if err == nil {
-			peers := []string{}
-			// Iterate SRV nodes
-			for _, n := range nodes {
-				target := n.Target
-				port := strconv.Itoa(int(n.Port))
-				// Resolve target to ip (Go returns list, so may resolve to multiple ips?)
-				addr, err := net.LookupHost(target)
-				if err == nil {
-					for _, a := range addr {
-						// Build string out of SRV port and Resolved IP
-						peer := net.JoinHostPort(a, port)
-						log.Println("Found DNS Bootstrap Peer:", peer)
-						peers = append(peers, peer)
-					}
-				} else {
-					log.Println("Couldn't resolve :", target)
-				}
-			}
-			// Connect to Peer list
-			s.ProcessPeerList(peers)
-		} else {
-			// Fallback to servers.poc3.txt
-			resp, err := http.Get("http://www.ethereum.org/servers.poc3.txt")
-			if err != nil {
-				log.Println("Fetching seed failed:", err)
-				return
-			}
-			defer resp.Body.Close()
-			body, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				log.Println("Reading seed failed:", err)
-				return
-			}
+	if seed {
+		s.Seed()
+	}
+}
 
-			s.ConnectToPeer(string(body))
+func (s *Ethereum) Seed() {
+	ethutil.Config.Log.Debugln("[SERV] Retrieving seed nodes")
+
+	// Eth-Go Bootstrapping
+	ips, er := net.LookupIP("seed.bysh.me")
+	if er == nil {
+		peers := []string{}
+		for _, ip := range ips {
+			node := fmt.Sprintf("%s:%d", ip.String(), 30303)
+			ethutil.Config.Log.Debugln("[SERV] Found DNS Go Peer:", node)
+			peers = append(peers, node)
 		}
+		s.ProcessPeerList(peers)
+	}
+
+	// Official DNS Bootstrapping
+	_, nodes, err := net.LookupSRV("eth", "tcp", "ethereum.org")
+	if err == nil {
+		peers := []string{}
+		// Iterate SRV nodes
+		for _, n := range nodes {
+			target := n.Target
+			port := strconv.Itoa(int(n.Port))
+			// Resolve target to ip (Go returns list, so may resolve to multiple ips?)
+			addr, err := net.LookupHost(target)
+			if err == nil {
+				for _, a := range addr {
+					// Build string out of SRV port and Resolved IP
+					peer := net.JoinHostPort(a, port)
+					ethutil.Config.Log.Debugln("[SERV] Found DNS Bootstrap Peer:", peer)
+					peers = append(peers, peer)
+				}
+			} else {
+				ethutil.Config.Log.Debugln("[SERV} Couldn't resolve :", target)
+			}
+		}
+		// Connect to Peer list
+		s.ProcessPeerList(peers)
+	} else {
+		// Fallback to servers.poc3.txt
+		resp, err := http.Get("http://www.ethereum.org/servers.poc3.txt")
+		if err != nil {
+			log.Println("Fetching seed failed:", err)
+			return
+		}
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Println("Reading seed failed:", err)
+			return
+		}
+
+		s.ConnectToPeer(string(body))
 	}
 }
 
@@ -340,7 +420,9 @@ func (s *Ethereum) Stop() {
 
 	close(s.quit)
 
-	s.RpcServer.Stop()
+	if s.RpcServer != nil {
+		s.RpcServer.Stop()
+	}
 	s.txPool.Stop()
 	s.stateManager.Stop()
 

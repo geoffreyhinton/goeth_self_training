@@ -3,15 +3,27 @@ package ethchain
 import (
 	"bytes"
 	"fmt"
-	"github.com/geoffreyhinton/goeth_self_training/ethutil"
-	"github.com/geoffreyhinton/goeth_self_training/ethwire"
 	"math/big"
 	"sync"
 	"time"
+
+	"github.com/geoffreyhinton/goeth_self_training/ethutil"
+	"github.com/geoffreyhinton/goeth_self_training/ethwire"
 )
 
-type BlockProcessor struct {
+type BlockProcessor interface {
 	ProcessBlock(block *Block)
+}
+
+type EthManager interface {
+	StateManager() *StateManager
+	BlockChain() *BlockChain
+	TxPool() *TxPool
+	Broadcast(msgType ethwire.MsgType, data []interface{})
+	Reactor() *ethutil.ReactorEngine
+	PeerCount() int
+	IsMining() bool
+	IsListening() bool
 }
 
 type StateManager struct {
@@ -48,9 +60,9 @@ type StateManager struct {
 
 func NewStateManager(ethereum EthManager) *StateManager {
 	sm := &StateManager{
-		stack: 			 NewStack(),
-		mem:  			 make(map[string]*big.Int),
-		Pow: &EasyPow{},
+		stack:            NewStack(),
+		mem:              make(map[string]*big.Int),
+		Pow:              &EasyPow{},
 		Ethereum:         ethereum,
 		stateObjectCache: NewStateObjectCache(),
 		bc:               ethereum.BlockChain(),
@@ -128,6 +140,13 @@ func (sm *StateManager) ApplyTransactions(block *Block, txs []*Transaction) {
 			}
 		}
 	}
+}
+
+// The prepare function, prepares the state manager for the next
+// "ProcessBlock" action.
+func (sm *StateManager) Prepare(processor *State, comparative *State) {
+	sm.compState = comparative
+	sm.procState = processor
 }
 
 // Default prepare function
