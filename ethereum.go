@@ -13,6 +13,7 @@ import (
 
 	"github.com/geoffreyhinton/goeth_self_training/ethchain"
 	"github.com/geoffreyhinton/goeth_self_training/ethdb"
+	"github.com/geoffreyhinton/goeth_self_training/etherpc"
 	"github.com/geoffreyhinton/goeth_self_training/ethutil"
 	"github.com/geoffreyhinton/goeth_self_training/ethwire"
 )
