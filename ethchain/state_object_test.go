@@ -10,7 +10,7 @@ import (
 )
 
 func TestSync(t *testing.T) {
-	ethutil.ReadConfig("", ethutil.LogStd, "")
+	ethutil.ReadConfig("", ethutil.LogStd, nil, "")
 
 	db, _ := ethdb.NewMemDatabase()
 	state := NewState(ethutil.NewTrie(db, ""))

@@ -6,7 +6,7 @@ toolchain go1.23.10
 
 require (
 	github.com/jackpal/go-nat-pmp v1.0.2
-	github.com/obscuren/mutan v0.0.0-20140505152242-4fe2edc5128d
+	github.com/obscuren/mutan v0.0.0-20140513091014-0fa74ad24ed0
 	github.com/obscuren/secp256k1-go v0.0.0-20150120133951-20a95cb2d816
 	github.com/obscuren/sha3 v0.0.0-20140201172202-4ae244389bb9
 	github.com/rakyll/globalconf v0.0.0-20180912185831-87f8127c421f
