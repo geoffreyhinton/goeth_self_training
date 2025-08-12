@@ -1,7 +1,7 @@
 package ethutil
 
 import (
-	_ "fmt"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -26,7 +26,6 @@ func (db *MemDatabase) Delete(key []byte) error {
 	delete(db.db, string(key))
 	return nil
 }
-func (db *MemDatabase) GetKeys() []*Key     { return nil }
 func (db *MemDatabase) Print()              {}
 func (db *MemDatabase) Close()              {}
 func (db *MemDatabase) LastKnownTD() []byte { return nil }
@@ -91,7 +90,7 @@ func TestTrieGet(t *testing.T) {
 	trie.Update("cat", LONG_WORD)
 	x := trie.Get("cat")
 	if x != LONG_WORD {
-		t.Errorf("expected %s, got %s", LONG_WORD, x)
+		t.Error("expected %s, got %s", LONG_WORD, x)
 	}
 }
 
@@ -101,7 +100,7 @@ func TestTrieUpdating(t *testing.T) {
 	trie.Update("cat", LONG_WORD+"1")
 	x := trie.Get("cat")
 	if x != LONG_WORD+"1" {
-		t.Errorf("expected %s, got %s", LONG_WORD+"1", x)
+		t.Error("expected %S, got %s", LONG_WORD+"1", x)
 	}
 }
 
@@ -155,7 +154,7 @@ func TestTrieDeleteWithValue(t *testing.T) {
 
 }
 
-func TestTrieIterator(t *testing.T) {
+func TestTriePurge(t *testing.T) {
 	_, trie := New()
 	trie.Update("c", LONG_WORD)
 	trie.Update("ca", LONG_WORD)
@@ -170,4 +169,16 @@ func TestTrieIterator(t *testing.T) {
 	if lenBefore == len(trie.cache.nodes) {
 		t.Errorf("Expected cached nodes to be deleted")
 	}
+}
+
+func TestTrieIt(t *testing.T) {
+	_, trie := New()
+	trie.Update("c", LONG_WORD)
+	trie.Update("ca", LONG_WORD)
+	trie.Update("cat", LONG_WORD)
+
+	it := trie.NewIterator()
+	it.Each(func(key string, node *Value) {
+		fmt.Println(key, ":", node.Str())
+	})
 }

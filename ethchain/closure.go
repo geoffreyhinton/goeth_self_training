@@ -10,33 +10,31 @@ type ClosureRef interface {
 	ReturnGas(*big.Int, *big.Int, *State)
 	Address() []byte
 	GetMem(*big.Int) *ethutil.Value
-	SetMem(*big.Int, *ethutil.Value)
+	SetStorage(*big.Int, *ethutil.Value)
 	N() *big.Int
 }
 
 // Basic inline closure object which implement the 'closure' interface
 type Closure struct {
-	callee *StateObject
+	callee ClosureRef
 	object *StateObject
 	Script []byte
 	State  *State
 
-	Gas   *big.Int
-	Price *big.Int
-	Value *big.Int
+	Gas, UsedGas, Price *big.Int
 
 	Args []byte
 }
 
 // Create a new closure for the given data items
-func NewClosure(callee, object *StateObject, script []byte, state *State, gas, price, val *big.Int) *Closure {
+func NewClosure(callee ClosureRef, object *StateObject, script []byte, state *State, gas, price *big.Int) *Closure {
 	c := &Closure{callee: callee, object: object, Script: script, State: state, Args: nil}
 
 	// In most cases gas, price and value are pointers to transaction objects
 	// and we don't want the transaction's values to change.
 	c.Gas = new(big.Int).Set(gas)
 	c.Price = new(big.Int).Set(price)
-	c.Value = new(big.Int).Set(val)
+	c.UsedGas = new(big.Int)
 
 	return c
 }
@@ -65,20 +63,22 @@ func (c *Closure) Gets(x, y *big.Int) *ethutil.Value {
 	return ethutil.NewValue(partial)
 }
 
-func (c *Closure) SetMem(x *big.Int, val *ethutil.Value) {
-	c.object.SetMem(x, val)
+func (c *Closure) SetStorage(x *big.Int, val *ethutil.Value) {
+	c.object.SetStorage(x, val)
 }
 
 func (c *Closure) Address() []byte {
 	return c.object.Address()
 }
 
-type DebugHook func(step int, op OpCode, mem *Memory, stack *Stack)
+type DebugHook func(step int, op OpCode, mem *Memory, stack *Stack, stateObject *StateObject) bool
 
-func (c *Closure) Call(vm *Vm, args []byte, hook DebugHook) ([]byte, error) {
+func (c *Closure) Call(vm *Vm, args []byte, hook DebugHook) ([]byte, *big.Int, error) {
 	c.Args = args
 
-	return vm.RunClosure(c, hook)
+	ret, err := vm.RunClosure(c, hook)
+
+	return ret, c.UsedGas, err
 }
 
 func (c *Closure) Return(ret []byte) []byte {
@@ -94,17 +94,30 @@ func (c *Closure) Return(ret []byte) []byte {
 	return ret
 }
 
+func (c *Closure) UseGas(gas *big.Int) bool {
+	if c.Gas.Cmp(gas) < 0 {
+		return false
+	}
+
+	// Sub the amount of gas from the remaining
+	c.Gas.Sub(c.Gas, gas)
+	c.UsedGas.Add(c.UsedGas, gas)
+
+	return true
+}
+
 // Implement the Callee interface
 func (c *Closure) ReturnGas(gas, price *big.Int, state *State) {
 	// Return the gas to the closure
 	c.Gas.Add(c.Gas, gas)
+	c.UsedGas.Sub(c.UsedGas, gas)
 }
 
 func (c *Closure) Object() *StateObject {
 	return c.object
 }
 
-func (c *Closure) Callee() *StateObject {
+func (c *Closure) Callee() ClosureRef {
 	return c.callee
 }
 

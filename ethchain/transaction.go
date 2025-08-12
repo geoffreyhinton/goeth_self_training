@@ -1,6 +1,7 @@
 package ethchain
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/geoffreyhinton/goeth_self_training/ethutil"
@@ -16,7 +17,6 @@ type Transaction struct {
 	Gas       *big.Int
 	GasPrice  *big.Int
 	Data      []byte
-	Init      []byte
 	v         byte
 	r, s      []byte
 
@@ -24,8 +24,8 @@ type Transaction struct {
 	contractCreation bool
 }
 
-func NewContractCreationTx(value, gas, gasPrice *big.Int, script []byte, init []byte) *Transaction {
-	return &Transaction{Value: value, Gas: gas, GasPrice: gasPrice, Data: script, Init: init, contractCreation: true}
+func NewContractCreationTx(value, gas, gasPrice *big.Int, script []byte) *Transaction {
+	return &Transaction{Value: value, Gas: gas, GasPrice: gasPrice, Data: script, contractCreation: true}
 }
 
 func NewTransactionMessage(to []byte, value, gas, gasPrice *big.Int, data []byte) *Transaction {
@@ -47,21 +47,28 @@ func NewTransactionFromValue(val *ethutil.Value) *Transaction {
 }
 
 func (tx *Transaction) Hash() []byte {
-	data := []interface{}{tx.Nonce, tx.Value, tx.GasPrice, tx.Gas, tx.Recipient, tx.Data}
+	data := []interface{}{tx.Nonce, tx.GasPrice, tx.Gas, tx.Recipient, tx.Value, tx.Data}
 
-	if tx.contractCreation {
-		data = append(data, tx.Init)
-	}
+	/*
+		if tx.contractCreation {
+			data = append(data, tx.Init)
+		}
+	*/
 
 	return ethutil.Sha3Bin(ethutil.NewValue(data).Encode())
 }
 
-func (tx *Transaction) IsContract() bool {
+func (tx *Transaction) CreatesContract() bool {
 	return tx.contractCreation
 }
 
+/* Depricated */
+func (tx *Transaction) IsContract() bool {
+	return tx.CreatesContract()
+}
+
 func (tx *Transaction) CreationAddress() []byte {
-	return tx.Hash()[12:]
+	return ethutil.Sha3Bin(ethutil.NewValue([]interface{}{tx.Sender(), tx.Nonce}).Encode())[12:]
 }
 
 func (tx *Transaction) Signature(key []byte) []byte {
@@ -110,14 +117,8 @@ func (tx *Transaction) Sign(privk []byte) error {
 	return nil
 }
 
-// [ NONCE, VALUE, GASPRICE, GAS, TO, DATA, V, R, S ]
-// [ NONCE, VALUE, GASPRICE, GAS, 0, CODE, INIT, V, R, S ]
 func (tx *Transaction) RlpData() interface{} {
-	data := []interface{}{tx.Nonce, tx.Value, tx.GasPrice, tx.Gas, tx.Recipient, tx.Data}
-
-	if tx.contractCreation {
-		data = append(data, tx.Init)
-	}
+	data := []interface{}{tx.Nonce, tx.GasPrice, tx.Gas, tx.Recipient, tx.Value, tx.Data}
 
 	return append(data, tx.v, tx.r, tx.s)
 }
@@ -136,23 +137,91 @@ func (tx *Transaction) RlpDecode(data []byte) {
 
 func (tx *Transaction) RlpValueDecode(decoder *ethutil.Value) {
 	tx.Nonce = decoder.Get(0).Uint()
-	tx.Value = decoder.Get(1).BigInt()
-	tx.GasPrice = decoder.Get(2).BigInt()
-	tx.Gas = decoder.Get(3).BigInt()
-	tx.Recipient = decoder.Get(4).Bytes()
+	tx.GasPrice = decoder.Get(1).BigInt()
+	tx.Gas = decoder.Get(2).BigInt()
+	tx.Recipient = decoder.Get(3).Bytes()
+	tx.Value = decoder.Get(4).BigInt()
 	tx.Data = decoder.Get(5).Bytes()
-
-	// If the list is of length 10 it's a contract creation tx
-	if decoder.Len() == 10 {
+	tx.v = byte(decoder.Get(6).Uint())
+	tx.r = decoder.Get(7).Bytes()
+	tx.s = decoder.Get(8).Bytes()
+	if len(tx.Recipient) == 0 {
 		tx.contractCreation = true
-		tx.Init = decoder.Get(6).Bytes()
-
-		tx.v = byte(decoder.Get(7).Uint())
-		tx.r = decoder.Get(8).Bytes()
-		tx.s = decoder.Get(9).Bytes()
-	} else {
-		tx.v = byte(decoder.Get(6).Uint())
-		tx.r = decoder.Get(7).Bytes()
-		tx.s = decoder.Get(8).Bytes()
 	}
+}
+
+func (tx *Transaction) String() string {
+	return fmt.Sprintf(`
+	TX(%x)
+	Contract: %v
+	From:     %x
+	To:       %x
+	Nonce:    %v
+	GasPrice: %v
+	Gas:      %v
+	Value:    %v
+	Data:     0x%x
+	V:        0x%x
+	R:        0x%x
+	S:        0x%x
+	`,
+		tx.Hash(),
+		len(tx.Recipient) == 0,
+		tx.Sender(),
+		tx.Recipient,
+		tx.Nonce,
+		tx.GasPrice,
+		tx.Gas,
+		tx.Value,
+		tx.Data,
+		tx.v,
+		tx.r,
+		tx.s)
+}
+
+type Receipt struct {
+	Tx                *Transaction
+	PostState         []byte
+	CumulativeGasUsed *big.Int
+}
+
+func NewRecieptFromValue(val *ethutil.Value) *Receipt {
+	r := &Receipt{}
+	r.RlpValueDecode(val)
+
+	return r
+}
+
+func (self *Receipt) RlpValueDecode(decoder *ethutil.Value) {
+	self.Tx = NewTransactionFromValue(decoder.Get(0))
+	self.PostState = decoder.Get(1).Bytes()
+	self.CumulativeGasUsed = decoder.Get(2).BigInt()
+}
+
+func (self *Receipt) RlpData() interface{} {
+	return []interface{}{self.Tx.RlpData(), self.PostState, self.CumulativeGasUsed}
+}
+
+func (self *Receipt) String() string {
+	return fmt.Sprintf(`
+	R
+	Tx:[                 %v]
+	PostState:           0x%x
+	CumulativeGasUsed:   %v
+	`,
+		self.Tx,
+		self.PostState,
+		self.CumulativeGasUsed)
+}
+
+// Transaction slice type for basic sorting
+type Transactions []*Transaction
+
+func (s Transactions) Len() int      { return len(s) }
+func (s Transactions) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+type TxByNonce struct{ Transactions }
+
+func (s TxByNonce) Less(i, j int) bool {
+	return s.Transactions[i].Nonce < s.Transactions[j].Nonce
 }

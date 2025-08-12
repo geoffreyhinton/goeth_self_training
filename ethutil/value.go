@@ -16,7 +16,7 @@ type Value struct {
 }
 
 func (val *Value) String() string {
-	return fmt.Sprintf("%q", val.Val)
+	return fmt.Sprintf("%x", val.Val)
 }
 
 func NewValue(val interface{}) *Value {
@@ -176,7 +176,7 @@ func (val *Value) Get(idx int) *Value {
 		}
 
 		if idx < 0 {
-			panic("negative idx for Value Get")
+			return NewValue(nil)
 		}
 
 		return NewValue(d[idx])

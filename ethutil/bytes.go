@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math/big"
 )
 
 // Number to bytes
@@ -82,4 +83,36 @@ func CopyBytes(b []byte) (copiedBytes []byte) {
 	copy(copiedBytes, b)
 
 	return
+}
+
+func IsHex(str string) bool {
+	l := len(str)
+	return l >= 4 && l%2 == 0 && str[0:2] == "0x"
+}
+
+func StringToByteFunc(str string, cb func(str string) []byte) (ret []byte) {
+	if len(str) > 1 && str[0:2] == "0x" {
+		ret = FromHex(str[2:])
+	} else {
+		ret = cb(str)
+	}
+
+	return
+}
+
+func FormatData(data string) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	// Simple stupid
+	d := new(big.Int)
+	if data[0:1] == "\"" && data[len(data)-1:] == "\"" {
+		d.SetBytes([]byte(data[1 : len(data)-1]))
+	} else if len(data) > 1 && data[:2] == "0x" {
+		d.SetBytes(FromHex(data[2:]))
+	} else {
+		d.SetString(data, 0)
+	}
+
+	return BigToBytes(d, 256)
 }

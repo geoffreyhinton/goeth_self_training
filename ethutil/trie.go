@@ -3,7 +3,12 @@ package ethutil
 import (
 	"fmt"
 	"reflect"
+	"sync"
 )
+
+func (s *Cache) Len() int {
+	return len(s.nodes)
+}
 
 // TODO
 // A StateObject is an object that has a state root
@@ -113,6 +118,7 @@ func (cache *Cache) Undo() {
 // Please note that the data isn't persisted unless `Sync` is
 // explicitly called.
 type Trie struct {
+	mut      sync.RWMutex
 	prevRoot interface{}
 	Root     interface{}
 	//db   Database
@@ -157,12 +163,18 @@ func (t *Trie) Cache() *Cache {
  * Public (query) interface functions
  */
 func (t *Trie) Update(key string, value string) {
+	t.mut.Lock()
+	defer t.mut.Unlock()
+
 	k := CompactHexDecode(key)
 
 	t.Root = t.UpdateState(t.Root, k, value)
 }
 
 func (t *Trie) Get(key string) string {
+	t.mut.RLock()
+	defer t.mut.RUnlock()
+
 	k := CompactHexDecode(key)
 	c := NewValue(t.GetState(t.Root, k))
 
@@ -430,6 +442,8 @@ type TrieIterator struct {
 
 	shas   [][]byte
 	values []string
+
+	lastNode []byte
 }
 
 func (t *Trie) NewIterator() *TrieIterator {
@@ -500,4 +514,48 @@ func (it *TrieIterator) Key() string {
 
 func (it *TrieIterator) Value() string {
 	return ""
+}
+
+type EachCallback func(key string, node *Value)
+
+func (it *TrieIterator) Each(cb EachCallback) {
+	it.fetchNode(nil, NewValue(it.trie.Root).Bytes(), cb)
+}
+
+func (it *TrieIterator) fetchNode(key []int, node []byte, cb EachCallback) {
+	it.iterateNode(key, it.trie.cache.Get(node), cb)
+}
+
+func (it *TrieIterator) iterateNode(key []int, currentNode *Value, cb EachCallback) {
+	if currentNode.Len() == 2 {
+		k := CompactDecode(currentNode.Get(0).Str())
+
+		if currentNode.Get(1).Str() == "" {
+			it.iterateNode(key, currentNode.Get(1), cb)
+		} else {
+			pk := append(key, k...)
+
+			if k[len(k)-1] == 16 {
+				cb(DecodeCompact(pk), currentNode.Get(1))
+			} else {
+				it.fetchNode(pk, currentNode.Get(1).Bytes(), cb)
+			}
+		}
+	} else {
+		for i := 0; i < currentNode.Len(); i++ {
+			pk := append(key, i)
+			if i == 16 && currentNode.Get(i).Len() != 0 {
+				cb(DecodeCompact(pk), currentNode.Get(i))
+			} else {
+				if currentNode.Get(i).Str() == "" {
+					it.iterateNode(pk, currentNode.Get(i), cb)
+				} else {
+					val := currentNode.Get(i).Str()
+					if val != "" {
+						it.fetchNode(pk, []byte(val), cb)
+					}
+				}
+			}
+		}
+	}
 }
