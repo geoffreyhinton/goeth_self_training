@@ -29,7 +29,7 @@ func TestSync(t *testing.T) {
 }
 
 func TestObjectGet(t *testing.T) {
-	ethutil.ReadConfig("", ethutil.LogStd, "")
+	ethutil.ReadConfig("", ethutil.LogStd, nil, "")
 
 	db, _ := ethdb.NewMemDatabase()
 	ethutil.Config.Db = db

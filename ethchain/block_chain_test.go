@@ -1,6 +1,7 @@
 package ethchain
 
 import (
+	"container/list"
 	"fmt"
 	"testing"
 
@@ -17,6 +18,11 @@ type TestManager struct {
 	txPool     *TxPool
 	blockChain *BlockChain
 	Blocks     []*Block
+}
+
+// Peers implements EthManager.
+func (s *TestManager) Peers() *list.List {
+	return list.New()
 }
 
 func (s *TestManager) IsListening() bool {
@@ -51,7 +57,7 @@ func (tm *TestManager) Broadcast(msgType ethwire.MsgType, data []interface{}) {
 }
 
 func NewTestManager() *TestManager {
-	ethutil.ReadConfig(".ethtest", ethutil.LogStd, "")
+	ethutil.ReadConfig(".ethtest", ethutil.LogStd, nil, "")
 
 	db, err := ethdb.NewMemDatabase()
 	if err != nil {
