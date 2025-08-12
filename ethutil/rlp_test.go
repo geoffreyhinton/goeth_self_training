@@ -2,7 +2,6 @@ package ethutil
 
 import (
 	"bytes"
-	"fmt"
 	"math/big"
 	"reflect"
 	"testing"
@@ -56,15 +55,6 @@ func TestValue(t *testing.T) {
 	}
 }
 
-func TestEncodeDecodeMaran(t *testing.T) {
-	b := NewValue([]interface{}{"dog", 15, []interface{}{"cat", "cat", []interface{}{}}, 1024, "tachikoma"})
-	a := b.Encode()
-	fmt.Println("voor maran", a)
-	f, i := Decode(a, 0)
-	fmt.Println("voor maran 2", f)
-	fmt.Println(i)
-}
-
 func TestEncode(t *testing.T) {
 	strRes := "\x83dog"
 	bytes := Encode("dog")
@@ -79,7 +69,7 @@ func TestEncode(t *testing.T) {
 	bytes = Encode(strs)
 	slice := string(bytes)
 	if slice != sliceRes {
-		t.Errorf("Expected %q, got %q", sliceRes, slice)
+		t.Error("Expected %q, got %q", sliceRes, slice)
 	}
 
 	intRes := "\x82\x04\x00"
@@ -131,7 +121,10 @@ func TestEncodeDecodeBytes(t *testing.T) {
 
 func TestEncodeZero(t *testing.T) {
 	b := NewValue(0).Encode()
-	fmt.Println(b)
+	exp := []byte{0xc0}
+	if bytes.Compare(b, exp) == 0 {
+		t.Error("Expected", exp, "got", b)
+	}
 }
 
 func BenchmarkEncodeDecode(b *testing.B) {

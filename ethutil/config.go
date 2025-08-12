@@ -1,20 +1,15 @@
 package ethutil
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/user"
 	"path"
 	"runtime"
-)
 
-// Log types available
-type LogType byte
-
-const (
-	LogTypeStdIn = 1
-	LogTypeFile  = 2
+	"github.com/rakyll/globalconf"
 )
 
 // Config struct
@@ -27,32 +22,64 @@ type config struct {
 	Ver          string
 	ClientString string
 	Pubkey       []byte
-	Seed         bool
+	Identifier   string
+
+	conf *globalconf.GlobalConf
 }
 
+const defaultConf = `
+id = ""
+port = 30303
+upnp = true
+maxpeer = 10
+rpc = false
+rpcport = 8080
+`
+
 var Config *config
+
+func ApplicationFolder(base string) string {
+	usr, _ := user.Current()
+	p := path.Join(usr.HomeDir, base)
+
+	if len(base) > 0 {
+		//Check if the logging directory already exists, create it if not
+		_, err := os.Stat(p)
+		if err != nil {
+			if os.IsNotExist(err) {
+				log.Printf("Debug logging directory %s doesn't exist, creating it\n", p)
+				os.Mkdir(p, 0777)
+
+			}
+		}
+
+		iniFilePath := path.Join(p, "conf.ini")
+		_, err = os.Stat(iniFilePath)
+		if err != nil && os.IsNotExist(err) {
+			file, err := os.Create(iniFilePath)
+			if err != nil {
+				fmt.Println(err)
+			} else {
+				assetPath := path.Join(os.Getenv("GOPATH"), "src", "github.com", "ethereum", "go-ethereum", "ethereal", "assets")
+				file.Write([]byte(defaultConf + "\nasset_path = " + assetPath))
+			}
+		}
+	}
+
+	return p
+}
 
 // Read config
 //
 // Initialize the global Config variable with default settings
-func ReadConfig(base string) *config {
+func ReadConfig(base string, logTypes LoggerType, g *globalconf.GlobalConf, id string) *config {
 	if Config == nil {
-		usr, _ := user.Current()
-		path := path.Join(usr.HomeDir, base)
+		path := ApplicationFolder(base)
 
-		if len(base) > 0 {
-			//Check if the logging directory already exists, create it if not
-			_, err := os.Stat(path)
-			if err != nil {
-				if os.IsNotExist(err) {
-					log.Printf("Debug logging directory %s doesn't exist, creating it\n", path)
-					os.Mkdir(path, 0777)
-				}
-			}
-		}
-
-		Config = &config{ExecPath: path, Debug: true, Ver: "0.5"}
-		Config.Log = NewLogger(LogFile|LogStd, LogLevelDebug)
+		Config = &config{ExecPath: path, Debug: true, Ver: "0.5.0 RC12"}
+		Config.conf = g
+		Config.Identifier = id
+		Config.Log = NewLogger(logTypes, LogLevelDebug)
 		Config.SetClientString("/Ethereum(G)")
 	}
 
@@ -61,7 +88,21 @@ func ReadConfig(base string) *config {
 
 // Set client string
 func (c *config) SetClientString(str string) {
-	Config.ClientString = fmt.Sprintf("%s nv%s/%s", str, c.Ver, runtime.GOOS)
+	id := runtime.GOOS
+	if len(c.Identifier) > 0 {
+		id = c.Identifier
+	}
+	Config.ClientString = fmt.Sprintf("%s nv%s/%s", str, c.Ver, id)
+}
+
+func (c *config) SetIdentifier(id string) {
+	c.Identifier = id
+	c.Set("id", id)
+}
+
+func (c *config) Set(key, value string) {
+	f := &flag.Flag{Name: key, Value: &confValue{value}}
+	c.conf.Set("", f)
 }
 
 type LoggerType byte
@@ -138,7 +179,6 @@ func (log *Logger) Infoln(v ...interface{}) {
 		return
 	}
 
-	fmt.Println(len(log.logSys))
 	for _, logger := range log.logSys {
 		logger.Println(v...)
 	}
@@ -153,3 +193,22 @@ func (log *Logger) Infof(format string, v ...interface{}) {
 		logger.Printf(format, v...)
 	}
 }
+
+func (log *Logger) Fatal(v ...interface{}) {
+	if log.logLevel > LogLevelInfo {
+		return
+	}
+
+	for _, logger := range log.logSys {
+		logger.Println(v...)
+	}
+
+	os.Exit(1)
+}
+
+type confValue struct {
+	value string
+}
+
+func (self confValue) String() string     { return self.value }
+func (self confValue) Set(s string) error { self.value = s; return nil }

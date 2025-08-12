@@ -1,6 +1,7 @@
 package ethchain
 
 import (
+	"container/list"
 	"fmt"
 	"testing"
 
@@ -11,16 +12,29 @@ import (
 
 // Implement our EthTest Manager
 type TestManager struct {
-	reactor *ethutil.ReactorEngine
-
-	txPool *TxPool
-	Blocks []*Block
-
 	stateManager *StateManager
-	blockChain   *BlockChain
-	peerCount    int
-	isListening  bool
-	isMining     bool
+	reactor      *ethutil.ReactorEngine
+
+	txPool     *TxPool
+	blockChain *BlockChain
+	Blocks     []*Block
+}
+
+// Peers implements EthManager.
+func (s *TestManager) Peers() *list.List {
+	return list.New()
+}
+
+func (s *TestManager) IsListening() bool {
+	return false
+}
+
+func (s *TestManager) IsMining() bool {
+	return false
+}
+
+func (s *TestManager) PeerCount() int {
+	return 0
 }
 
 func (s *TestManager) BlockChain() *BlockChain {
@@ -38,40 +52,12 @@ func (tm *TestManager) StateManager() *StateManager {
 func (tm *TestManager) Reactor() *ethutil.ReactorEngine {
 	return tm.reactor
 }
-
-// PeerCount implements the EthManager interface.
-func (tm *TestManager) PeerCount() int {
-	return tm.peerCount
-}
-
-// IsListening implements the EthManager interface.
-func (tm *TestManager) IsListening() bool {
-	return tm.isListening
-}
-
-func (tm *TestManager) IsMining() bool {
-	return tm.isMining
-}
-
-// Add the missing Broadcast method
 func (tm *TestManager) Broadcast(msgType ethwire.MsgType, data []interface{}) {
-	// For testing purposes, we can either:
-	// 1. Do nothing (no-op implementation)
-	// 2. Log the broadcast
-	// 3. Store broadcasts for testing verification
-
-	// Option 1: No-op (simplest for testing)
-	// Do nothing
-
-	// Option 2: Log for debugging
-	fmt.Printf("TestManager: Broadcasting message type %v with data: %v\n", msgType, data)
-
-	// Option 3: You could store broadcasts in a slice for test verification
-	// tm.broadcasts = append(tm.broadcasts, BroadcastMessage{msgType, data})
+	fmt.Println("Broadcast not implemented")
 }
 
 func NewTestManager() *TestManager {
-	ethutil.ReadConfig(".ethtest")
+	ethutil.ReadConfig(".ethtest", ethutil.LogStd, nil, "")
 
 	db, err := ethdb.NewMemDatabase()
 	if err != nil {
@@ -95,8 +81,7 @@ func NewTestManager() *TestManager {
 func (tm *TestManager) AddFakeBlock(blk []byte) error {
 	block := NewBlockFromBytes(blk)
 	tm.Blocks = append(tm.Blocks, block)
-	tm.StateManager().PrepareDefault(block)
-	err := tm.StateManager().ProcessBlock(block, false)
+	err := tm.StateManager().Process(block, false)
 	return err
 }
 func (tm *TestManager) CreateChain1() error {

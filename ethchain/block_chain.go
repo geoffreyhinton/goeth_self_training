@@ -37,7 +37,7 @@ func (bc *BlockChain) Genesis() *Block {
 	return bc.genesisBlock
 }
 
-func (bc *BlockChain) NewBlock(coinbase []byte, txs []*Transaction) *Block {
+func (bc *BlockChain) NewBlock(coinbase []byte) *Block {
 	var root interface{}
 	var lastBlockTime int64
 	hash := ZeroHash256
@@ -54,8 +54,7 @@ func (bc *BlockChain) NewBlock(coinbase []byte, txs []*Transaction) *Block {
 		coinbase,
 		ethutil.BigPow(2, 32),
 		nil,
-		"",
-		txs)
+		"")
 
 	if bc.CurrentBlock != nil {
 		var mul *big.Int
@@ -71,6 +70,22 @@ func (bc *BlockChain) NewBlock(coinbase []byte, txs []*Transaction) *Block {
 		diff.Mul(diff, mul)
 		diff.Add(diff, bc.CurrentBlock.Difficulty)
 		block.Difficulty = diff
+
+		block.Number = new(big.Int).Add(bc.CurrentBlock.Number, ethutil.Big1)
+
+		// max(10000, (parent gas limit * (1024 - 1) + (parent gas used * 6 / 5)) / 1024)
+		base := new(big.Int)
+		base2 := new(big.Int)
+		parentGL := bc.CurrentBlock.GasLimit
+		parentUsed := bc.CurrentBlock.GasUsed
+
+		base.Mul(parentGL, big.NewInt(1024-1))
+		base2.Mul(parentUsed, big.NewInt(6))
+		base2.Div(base2, big.NewInt(5))
+		base.Add(base, base2)
+		base.Div(base, big.NewInt(1024))
+
+		block.GasLimit = ethutil.BigMax(big.NewInt(10000), base)
 	}
 
 	return block
@@ -128,7 +143,6 @@ func (bc *BlockChain) FindCanonicalChain(blocks []*Block, commonBlockHash []byte
 			log.Println("[CHAIN] We have found the common parent block, breaking")
 			break
 		}
-		log.Println("Checking incoming blocks:")
 		chainDifficulty.Add(chainDifficulty, bc.CalculateBlockTD(block))
 	}
 
@@ -176,13 +190,14 @@ func (bc *BlockChain) ResetTillBlockHash(hash []byte) error {
 		returnTo = bc.GetBlock(hash)
 		bc.CurrentBlock = returnTo
 		bc.LastBlockHash = returnTo.Hash()
-		info := bc.BlockInfo(returnTo)
-		bc.LastBlockNumber = info.Number
+		//info := bc.BlockInfo(returnTo)
+		bc.LastBlockNumber = returnTo.Number.Uint64()
 	}
 
 	// XXX Why are we resetting? This is the block chain, it has nothing to do with states
 	//bc.Ethereum.StateManager().PrepareDefault(returnTo)
 
+	// Manually reset the last sync block
 	err := ethutil.Config.Db.Delete(lastBlock.Hash())
 	if err != nil {
 		return err
@@ -213,9 +228,9 @@ func (bc *BlockChain) GetChainFromHash(hash []byte, max uint64) []interface{} {
 	// Get the current hash to start with
 	currentHash := bc.CurrentBlock.Hash()
 	// Get the last number on the block chain
-	lastNumber := bc.BlockInfo(bc.CurrentBlock).Number
+	lastNumber := bc.CurrentBlock.Number.Uint64()
 	// Get the parents number
-	parentNumber := bc.BlockInfoByHash(hash).Number
+	parentNumber := bc.GetBlock(hash).Number.Uint64()
 	// Get the min amount. We might not have max amount of blocks
 	count := uint64(math.Min(float64(lastNumber-parentNumber), float64(max)))
 	startNumber := parentNumber + count
@@ -257,30 +272,33 @@ func (bc *BlockChain) GetChain(hash []byte, amount int) []*Block {
 
 func AddTestNetFunds(block *Block) {
 	for _, addr := range []string{
-		"8a40bfaa73256b60764c1bf40675a99083efb075", // Gavin
-		"e6716f9544a56c530d868e4bfbacb172315bdead", // Jeffrey
-		"1e12515ce3e0f817a4ddef9ca55788a1d66bd2df", // Vit
-		"1a26338f0d905e295fccb71fa9ea849ffa12aaf4", // Alex
-		"2ef47100e0787b915105fd5e3f4ff6752079d5cb", // Maran
+		"8a40bfaa73256b60764c1bf40675a99083efb075",
+		"e4157b34ea9615cfbde6b4fda419828124b70c78",
+		"1e12515ce3e0f817a4ddef9ca55788a1d66bd2df",
+		"6c386a4b26f73c802f34673f7248bb118f97424a",
+		"cd2a3d9f938e13cd947ec05abc7fe734df8dd826",
+		"2ef47100e0787b915105fd5e3f4ff6752079d5cb",
+		"e6716f9544a56c530d868e4bfbacb172315bdead",
+		"1a26338f0d905e295fccb71fa9ea849ffa12aaf4",
 	} {
-		//log.Println("2^200 Wei to", addr)
 		codedAddr := ethutil.FromHex(addr)
 		account := block.state.GetAccount(codedAddr)
-		account.Amount = ethutil.BigPow(2, 200)
+		account.Amount = ethutil.Big("1606938044258990275541962092341162602522202993782792835301376") //ethutil.BigPow(2, 200)
 		block.state.UpdateStateObject(account)
 	}
+	log.Printf("%x\n", block.RlpEncode())
 }
 
 func (bc *BlockChain) setLastBlock() {
 	data, _ := ethutil.Config.Db.Get([]byte("LastBlock"))
 	if len(data) != 0 {
 		block := NewBlockFromBytes(data)
-		info := bc.BlockInfo(block)
+		//info := bc.BlockInfo(block)
 		bc.CurrentBlock = block
 		bc.LastBlockHash = block.Hash()
-		bc.LastBlockNumber = info.Number
+		bc.LastBlockNumber = block.Number.Uint64()
 
-		log.Printf("[CHAIN] Last known block height #%d\n", bc.LastBlockNumber)
+		ethutil.Config.Log.Infof("[CHAIN] Last known block height #%d\n", bc.LastBlockNumber)
 	} else {
 		AddTestNetFunds(bc.genesisBlock)
 
@@ -295,7 +313,7 @@ func (bc *BlockChain) setLastBlock() {
 	// Set the last know difficulty (might be 0x0 as initial value, Genesis)
 	bc.TD = ethutil.BigD(ethutil.Config.Db.LastKnownTD())
 
-	log.Printf("Last block: %x\n", bc.CurrentBlock.Hash())
+	ethutil.Config.Log.Infof("Last block: %x\n", bc.CurrentBlock.Hash())
 }
 
 func (bc *BlockChain) SetTotalDifficulty(td *big.Int) {

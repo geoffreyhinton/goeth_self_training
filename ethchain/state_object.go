@@ -11,8 +11,9 @@ type StateObject struct {
 	// Address of the object
 	address []byte
 	// Shared attributes
-	Amount *big.Int
-	Nonce  uint64
+	Amount     *big.Int
+	ScriptHash []byte
+	Nonce      uint64
 	// Contract related attributes
 	state      *State
 	script     []byte
@@ -23,15 +24,12 @@ type StateObject struct {
 func MakeContract(tx *Transaction, state *State) *StateObject {
 	// Create contract if there's no recipient
 	if tx.IsContract() {
-		// FIXME
-		addr := tx.Hash()[12:]
+		addr := tx.CreationAddress()
 
 		value := tx.Value
-		contract := NewContract(addr, value, []byte(""))
-		state.UpdateStateObject(contract)
+		contract := NewContract(addr, value, ZeroHash256)
 
-		contract.script = tx.Data
-		contract.initScript = tx.Init
+		contract.initScript = tx.Data
 
 		state.UpdateStateObject(contract)
 
@@ -78,15 +76,21 @@ func (c *StateObject) SetAddr(addr []byte, value interface{}) {
 	c.state.trie.Update(string(addr), string(ethutil.NewValue(value).Encode()))
 }
 
-func (c *StateObject) SetMem(num *big.Int, val *ethutil.Value) {
+func (c *StateObject) SetStorage(num *big.Int, val *ethutil.Value) {
 	addr := ethutil.BigToBytes(num, 256)
+	//fmt.Println("storing", val.BigInt(), "@", num)
 	c.SetAddr(addr, val)
 }
 
-func (c *StateObject) GetMem(num *big.Int) *ethutil.Value {
+func (c *StateObject) GetStorage(num *big.Int) *ethutil.Value {
 	nb := ethutil.BigToBytes(num, 256)
 
 	return c.Addr(nb)
+}
+
+/* DEPRECATED */
+func (c *StateObject) GetMem(num *big.Int) *ethutil.Value {
+	return c.GetStorage(num)
 }
 
 func (c *StateObject) GetInstr(pc *big.Int) *ethutil.Value {
@@ -147,9 +151,10 @@ func (c *StateObject) RlpEncode() []byte {
 	if c.state != nil {
 		root = c.state.trie.Root
 	} else {
-		root = nil
+		root = ""
 	}
-	return ethutil.Encode([]interface{}{c.Amount, c.Nonce, root, c.script})
+
+	return ethutil.Encode([]interface{}{c.Amount, c.Nonce, root, ethutil.Sha3Bin(c.script)})
 }
 
 func (c *StateObject) RlpDecode(data []byte) {
@@ -158,32 +163,16 @@ func (c *StateObject) RlpDecode(data []byte) {
 	c.Amount = decoder.Get(0).BigInt()
 	c.Nonce = decoder.Get(1).Uint()
 	c.state = NewState(ethutil.NewTrie(ethutil.Config.Db, decoder.Get(2).Interface()))
-	c.script = decoder.Get(3).Bytes()
+
+	c.ScriptHash = decoder.Get(3).Bytes()
+
+	c.script, _ = ethutil.Config.Db.Get(c.ScriptHash)
 }
 
-// The cached state and state object cache are helpers which will give you somewhat
-// control over the nonce. When creating new transactions you're interested in the 'next'
-// nonce rather than the current nonce. This to avoid creating invalid-nonce transactions.
-type StateObjectCache struct {
-	cachedObjects map[string]*CachedStateObject
-}
-
-func NewStateObjectCache() *StateObjectCache {
-	return &StateObjectCache{cachedObjects: make(map[string]*CachedStateObject)}
-}
-
-func (s *StateObjectCache) Add(addr []byte, object *StateObject) *CachedStateObject {
-	state := &CachedStateObject{Nonce: object.Nonce, Object: object}
-	s.cachedObjects[string(addr)] = state
-
-	return state
-}
-
-func (s *StateObjectCache) Get(addr []byte) *CachedStateObject {
-	return s.cachedObjects[string(addr)]
-}
-
-type CachedStateObject struct {
-	Nonce  uint64
-	Object *StateObject
+// Storage change object. Used by the manifest for notifying changes to
+// the sub channels.
+type StorageState struct {
+	StateAddress []byte
+	Address      []byte
+	Value        *big.Int
 }

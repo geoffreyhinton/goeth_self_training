@@ -1,8 +1,10 @@
 package ethchain
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
+	"strconv"
 	"time"
 
 	"github.com/geoffreyhinton/goeth_self_training/ethutil"
@@ -41,15 +43,22 @@ type Block struct {
 	Difficulty *big.Int
 	// Creation time
 	Time int64
+	// The block number
+	Number *big.Int
+	// Minimum Gas Price
+	MinGasPrice *big.Int
+	// Gas limit
+	GasLimit *big.Int
+	// Gas used
+	GasUsed *big.Int
 	// Extra data
 	Extra string
 	// Block Nonce for verification
 	Nonce []byte
 	// List of transactions and/or contracts
 	transactions []*Transaction
+	receipts     []*Receipt
 	TxSha        []byte
-
-	contractStates map[string]*ethutil.Trie
 }
 
 // New block takes a raw encoded string
@@ -78,29 +87,23 @@ func CreateBlock(root interface{},
 	base []byte,
 	Difficulty *big.Int,
 	Nonce []byte,
-	extra string,
-	txes []*Transaction) *Block {
+	extra string) *Block {
 
 	block := &Block{
-		// Slice of transactions to include in this block
-		transactions:   txes,
-		PrevHash:       prevHash,
-		Coinbase:       base,
-		Difficulty:     Difficulty,
-		Nonce:          Nonce,
-		Time:           time.Now().Unix(),
-		Extra:          extra,
-		UncleSha:       EmptyShaList,
-		contractStates: make(map[string]*ethutil.Trie),
+		PrevHash:    prevHash,
+		Coinbase:    base,
+		Difficulty:  Difficulty,
+		Nonce:       Nonce,
+		Time:        time.Now().Unix(),
+		Extra:       extra,
+		UncleSha:    EmptyShaList,
+		GasUsed:     new(big.Int),
+		MinGasPrice: new(big.Int),
+		GasLimit:    new(big.Int),
 	}
-	block.SetTransactions(txes)
 	block.SetUncles([]*Block{})
 
 	block.state = NewState(ethutil.NewTrie(ethutil.Config.Db, root))
-
-	for _, tx := range txes {
-		block.MakeContract(tx)
-	}
 
 	return block
 }
@@ -111,7 +114,10 @@ func (block *Block) Hash() []byte {
 }
 
 func (block *Block) HashNoNonce() []byte {
-	return ethutil.Sha3Bin(ethutil.Encode([]interface{}{block.PrevHash, block.UncleSha, block.Coinbase, block.state.trie.Root, block.TxSha, block.Difficulty, block.Time, block.Extra}))
+	return ethutil.Sha3Bin(ethutil.Encode([]interface{}{block.PrevHash,
+		block.UncleSha, block.Coinbase, block.state.trie.Root,
+		block.TxSha, block.Difficulty, block.Number, block.MinGasPrice,
+		block.GasLimit, block.GasUsed, block.Time, block.Extra}))
 }
 
 func (block *Block) State() *State {
@@ -123,7 +129,7 @@ func (block *Block) Transactions() []*Transaction {
 }
 
 func (block *Block) PayFee(addr []byte, fee *big.Int) bool {
-	contract := block.state.GetContract(addr)
+	contract := block.state.GetStateObject(addr)
 	// If we can't pay the fee return
 	if contract == nil || contract.Amount.Cmp(fee) < 0 /* amount < fee */ {
 		fmt.Println("Contract has insufficient funds", contract.Amount, fee)
@@ -157,6 +163,16 @@ func (block *Block) BlockInfo() BlockInfo {
 	return bi
 }
 
+func (self *Block) GetTransaction(hash []byte) *Transaction {
+	for _, receipt := range self.receipts {
+		if bytes.Compare(receipt.Tx.Hash(), hash) == 0 {
+			return receipt.Tx
+		}
+	}
+
+	return nil
+}
+
 // Sync the block's state and contract respectively
 func (block *Block) Sync() {
 	block.state.Sync()
@@ -167,23 +183,16 @@ func (block *Block) Undo() {
 	block.state.Reset()
 }
 
-func (block *Block) MakeContract(tx *Transaction) {
-	contract := MakeContract(tx, block.state)
-	if contract != nil {
-		block.state.states[string(tx.Hash()[12:])] = contract.state
-	}
-}
-
 // ///// Block Encoding
-func (block *Block) rlpTxs() interface{} {
+func (block *Block) rlpReceipts() interface{} {
 	// Marshal the transactions of this block
-	encTx := make([]interface{}, len(block.transactions))
-	for i, tx := range block.transactions {
+	encR := make([]interface{}, len(block.receipts))
+	for i, r := range block.receipts {
 		// Cast it to a string (safe)
-		encTx[i] = tx.RlpData()
+		encR[i] = r.RlpData()
 	}
 
-	return encTx
+	return encR
 }
 
 func (block *Block) rlpUncles() interface{} {
@@ -204,14 +213,32 @@ func (block *Block) SetUncles(uncles []*Block) {
 	block.UncleSha = ethutil.Sha3Bin(ethutil.Encode(block.rlpUncles()))
 }
 
-func (block *Block) SetTransactions(txs []*Transaction) {
+func (self *Block) SetReceipts(receipts []*Receipt, txs []*Transaction) {
+	self.receipts = receipts
+	self.setTransactions(txs)
+}
+
+func (block *Block) setTransactions(txs []*Transaction) {
 	block.transactions = txs
 
-	block.TxSha = ethutil.Sha3Bin(ethutil.Encode(block.rlpTxs()))
+	trie := ethutil.NewTrie(ethutil.Config.Db, "")
+	for i, tx := range txs {
+		trie.Update(strconv.Itoa(i), string(tx.RlpEncode()))
+	}
+
+	switch trie.Root.(type) {
+	case string:
+		block.TxSha = []byte(trie.Root.(string))
+	case []byte:
+		block.TxSha = trie.Root.([]byte)
+	default:
+		panic(fmt.Sprintf("invalid root type %T", trie.Root))
+	}
+
 }
 
 func (block *Block) Value() *ethutil.Value {
-	return ethutil.NewValue([]interface{}{block.header(), block.rlpTxs(), block.rlpUncles()})
+	return ethutil.NewValue([]interface{}{block.header(), block.rlpReceipts(), block.rlpUncles()})
 }
 
 func (block *Block) RlpEncode() []byte {
@@ -234,20 +261,25 @@ func (block *Block) RlpValueDecode(decoder *ethutil.Value) {
 	block.state = NewState(ethutil.NewTrie(ethutil.Config.Db, header.Get(3).Val))
 	block.TxSha = header.Get(4).Bytes()
 	block.Difficulty = header.Get(5).BigInt()
-	block.Time = int64(header.Get(6).BigInt().Uint64())
-	block.Extra = header.Get(7).Str()
-	block.Nonce = header.Get(8).Bytes()
-	block.contractStates = make(map[string]*ethutil.Trie)
+	block.Number = header.Get(6).BigInt()
+	//fmt.Printf("#%v : %x\n", block.Number, block.Coinbase)
+	block.MinGasPrice = header.Get(7).BigInt()
+	block.GasLimit = header.Get(8).BigInt()
+	block.GasUsed = header.Get(9).BigInt()
+	block.Time = int64(header.Get(10).BigInt().Uint64())
+	block.Extra = header.Get(11).Str()
+	block.Nonce = header.Get(12).Bytes()
 
 	// Tx list might be empty if this is an uncle. Uncles only have their
 	// header set.
 	if decoder.Get(1).IsNil() == false { // Yes explicitness
-		txes := decoder.Get(1)
-		block.transactions = make([]*Transaction, txes.Len())
-		for i := 0; i < txes.Len(); i++ {
-			tx := NewTransactionFromValue(txes.Get(i))
-
-			block.transactions[i] = tx
+		receipts := decoder.Get(1)
+		block.transactions = make([]*Transaction, receipts.Len())
+		block.receipts = make([]*Receipt, receipts.Len())
+		for i := 0; i < receipts.Len(); i++ {
+			receipt := NewRecieptFromValue(receipts.Get(i))
+			block.transactions[i] = receipt.Tx
+			block.receipts[i] = receipt
 		}
 
 	}
@@ -271,21 +303,25 @@ func NewUncleBlockFromValue(header *ethutil.Value) *Block {
 	block.state = NewState(ethutil.NewTrie(ethutil.Config.Db, header.Get(3).Val))
 	block.TxSha = header.Get(4).Bytes()
 	block.Difficulty = header.Get(5).BigInt()
-	block.Time = int64(header.Get(6).BigInt().Uint64())
-	block.Extra = header.Get(7).Str()
-	block.Nonce = header.Get(8).Bytes()
+	block.Number = header.Get(6).BigInt()
+	block.MinGasPrice = header.Get(7).BigInt()
+	block.GasLimit = header.Get(8).BigInt()
+	block.GasUsed = header.Get(9).BigInt()
+	block.Time = int64(header.Get(10).BigInt().Uint64())
+	block.Extra = header.Get(11).Str()
+	block.Nonce = header.Get(12).Bytes()
 
 	return block
 }
 
-func (block *Block) String() string {
-	return fmt.Sprintf("Block(%x):\nPrevHash:%x\nUncleSha:%x\nCoinbase:%x\nRoot:%x\nTxSha:%x\nDiff:%v\nTime:%d\nNonce:%x\nTxs:%d\n", block.Hash(), block.PrevHash, block.UncleSha, block.Coinbase, block.state.trie.Root, block.TxSha, block.Difficulty, block.Time, block.Nonce, len(block.transactions))
-}
 func (block *Block) GetRoot() interface{} {
 	return block.state.trie.Root
 }
 
-// ////////// UNEXPORTED /////////////////
+func (self *Block) Receipts() []*Receipt {
+	return self.receipts
+}
+
 func (block *Block) header() []interface{} {
 	return []interface{}{
 		// Sha of the previous block
@@ -300,6 +336,14 @@ func (block *Block) header() []interface{} {
 		block.TxSha,
 		// Current block Difficulty
 		block.Difficulty,
+		// The block number
+		block.Number,
+		// Block minimum gas price
+		block.MinGasPrice,
+		// Block upper gas bound
+		block.GasLimit,
+		// Block gas used
+		block.GasUsed,
 		// Time the block was found?
 		block.Time,
 		// Extra data
@@ -307,4 +351,40 @@ func (block *Block) header() []interface{} {
 		// Block's Nonce for validation
 		block.Nonce,
 	}
+}
+
+func (block *Block) String() string {
+	return fmt.Sprintf(`
+	BLOCK(%x):
+	PrevHash:   %x
+	UncleSha:   %x
+	Coinbase:   %x
+	Root:       %x
+	TxSha:      %x
+	Difficulty: %v
+	Number:     %v
+	MinGas:     %v
+	MaxLimit:   %v
+	GasUsed:    %v
+	Time:       %v
+	Extra:      %v
+	Nonce:      %x
+	NumTx:      %v
+`,
+		block.Hash(),
+		block.PrevHash,
+		block.UncleSha,
+		block.Coinbase,
+		block.state.trie.Root,
+		block.TxSha,
+		block.Difficulty,
+		block.Number,
+		block.MinGasPrice,
+		block.GasLimit,
+		block.GasUsed,
+		block.Time,
+		block.Extra,
+		block.Nonce,
+		len(block.transactions),
+	)
 }

@@ -82,8 +82,9 @@ func NewTxPool(ethereum EthManager) *TxPool {
 // Blocking function. Don't use directly. Use QueueTransaction instead
 func (pool *TxPool) addTransaction(tx *Transaction) {
 	pool.mutex.Lock()
+	defer pool.mutex.Unlock()
+
 	pool.pool.PushBack(tx)
-	pool.mutex.Unlock()
 
 	// Broadcast the transaction to the rest of the peers
 	pool.Ethereum.Broadcast(ethwire.MsgTxTy, []interface{}{tx.RlpData()})
@@ -91,35 +92,47 @@ func (pool *TxPool) addTransaction(tx *Transaction) {
 
 // Process transaction validates the Tx and processes funds from the
 // sender to the recipient.
-func (pool *TxPool) ProcessTransaction(tx *Transaction, block *Block, toContract bool) (err error) {
+func (pool *TxPool) ProcessTransaction(tx *Transaction, state *State, toContract bool) (gas *big.Int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Println(r)
+			ethutil.Config.Log.Infoln(r)
 			err = fmt.Errorf("%v", r)
 		}
 	}()
+
+	gas = new(big.Int)
+	addGas := func(g *big.Int) { gas.Add(gas, g) }
+
 	// Get the sender
-	sender := block.state.GetAccount(tx.Sender())
+	sender := state.GetAccount(tx.Sender())
 
 	if sender.Nonce != tx.Nonce {
-		return fmt.Errorf("[TXPL] Invalid account nonce, state nonce is %d transaction nonce is %d instead", sender.Nonce, tx.Nonce)
+		err = NonceError(tx.Nonce, sender.Nonce)
+		return
 	}
+
+	txTotalBytes := big.NewInt(int64(len(tx.Data)))
+	txTotalBytes.Div(txTotalBytes, ethutil.Big32)
+	addGas(new(big.Int).Mul(txTotalBytes, GasSStore))
 
 	// Make sure there's enough in the sender's account. Having insufficient
 	// funds won't invalidate this transaction but simple ignores it.
-	totAmount := new(big.Int).Add(tx.Value, new(big.Int).Mul(TxFee, TxFeeRat))
+	//totAmount := new(big.Int).Add(tx.Value, new(big.Int).Mul(TxFee, TxFeeRat))
+	totAmount := new(big.Int).Add(tx.Value, new(big.Int).Mul(tx.Gas, tx.GasPrice))
 	if sender.Amount.Cmp(totAmount) < 0 {
-		return fmt.Errorf("[TXPL] Insufficient amount in sender's (%x) account", tx.Sender())
+		err = fmt.Errorf("[TXPL] Insufficient amount in sender's (%x) account", tx.Sender())
+		return
 	}
 
 	// Get the receiver
-	receiver := block.state.GetAccount(tx.Recipient)
+	receiver := state.GetAccount(tx.Recipient)
 	sender.Nonce += 1
 
 	// Send Tx to self
 	if bytes.Compare(tx.Recipient, tx.Sender()) == 0 {
+		addGas(GasTx)
 		// Subtract the fee
-		sender.SubAmount(new(big.Int).Mul(TxFee, TxFeeRat))
+		sender.SubAmount(new(big.Int).Mul(GasTx, tx.GasPrice))
 	} else {
 		// Subtract the amount from the senders account
 		sender.SubAmount(totAmount)
@@ -127,14 +140,15 @@ func (pool *TxPool) ProcessTransaction(tx *Transaction, block *Block, toContract
 		// Add the amount to receivers account which should conclude this transaction
 		receiver.AddAmount(tx.Value)
 
-		block.state.UpdateStateObject(receiver)
+		state.UpdateStateObject(receiver)
 	}
 
-	block.state.UpdateStateObject(sender)
+	state.UpdateStateObject(sender)
 
-	log.Printf("[TXPL] Processed Tx %x\n", tx.Hash())
+	ethutil.Config.Log.Infof("[TXPL] Processed Tx %x\n", tx.Hash())
 
-	pool.notifySubscribers(TxPost, tx)
+	// Notify all subscribers
+	pool.Ethereum.Reactor().Post("newTx:post", tx)
 
 	return
 }
@@ -149,8 +163,8 @@ func (pool *TxPool) ValidateTransaction(tx *Transaction) error {
 	}
 
 	// Get the sender
-	accountState := pool.Ethereum.StateManager().GetAddrState(tx.Sender())
-	sender := accountState.Object
+	//sender := pool.Ethereum.StateManager().procState.GetAccount(tx.Sender())
+	sender := pool.Ethereum.StateManager().CurrentState().GetAccount(tx.Sender())
 
 	totAmount := new(big.Int).Add(tx.Value, new(big.Int).Mul(TxFee, TxFeeRat))
 	// Make sure there's enough in the sender's account. Having insufficient
@@ -182,18 +196,13 @@ out:
 			// Validate the transaction
 			err := pool.ValidateTransaction(tx)
 			if err != nil {
-				if ethutil.Config.Debug {
-					log.Println("Validating Tx failed", err)
-				}
+				ethutil.Config.Log.Debugln("Validating Tx failed", err)
 			} else {
 				// Call blocking version.
 				pool.addTransaction(tx)
 
 				// Notify the subscribers
-				pool.Ethereum.Reactor().Post("newTx", tx)
-
-				// Notify the subscribers
-				pool.notifySubscribers(TxPre, tx)
+				pool.Ethereum.Reactor().Post("newTx:pre", tx)
 			}
 		case <-pool.quit:
 			break out
@@ -212,14 +221,25 @@ func (pool *TxPool) CurrentTransactions() []*Transaction {
 	txList := make([]*Transaction, pool.pool.Len())
 	i := 0
 	for e := pool.pool.Front(); e != nil; e = e.Next() {
-		if tx, ok := e.Value.(*Transaction); ok {
-			txList[i] = tx
-		}
+		tx := e.Value.(*Transaction)
+
+		txList[i] = tx
 
 		i++
 	}
 
 	return txList
+}
+
+func (pool *TxPool) RemoveInvalid(state *State) {
+	for e := pool.pool.Front(); e != nil; e = e.Next() {
+		tx := e.Value.(*Transaction)
+		sender := state.GetAccount(tx.Sender())
+		err := pool.ValidateTransaction(tx)
+		if err != nil || sender.Nonce >= tx.Nonce {
+			pool.pool.Remove(e)
+		}
+	}
 }
 
 func (pool *TxPool) Flush() []*Transaction {
@@ -242,15 +262,4 @@ func (pool *TxPool) Stop() {
 	pool.Flush()
 
 	log.Println("[TXP] Stopped")
-}
-
-func (pool *TxPool) Subscribe(channel chan TxMsg) {
-	pool.subscribers = append(pool.subscribers, channel)
-}
-
-func (pool *TxPool) notifySubscribers(ty TxMsgTy, tx *Transaction) {
-	msg := TxMsg{Type: ty, Tx: tx}
-	for _, subscriber := range pool.subscribers {
-		subscriber <- msg
-	}
 }

@@ -3,8 +3,10 @@ package ethrpc
 import (
 	"encoding/json"
 	"errors"
+	"math/big"
 
 	"github.com/geoffreyhinton/goeth_self_training/ethpub"
+	"github.com/geoffreyhinton/goeth_self_training/ethutil"
 )
 
 type EthereumApi struct {
@@ -12,7 +14,7 @@ type EthereumApi struct {
 }
 
 type JsonArgs interface {
-	requrements() error
+	requirements() error
 }
 
 type BlockResponse struct {
@@ -85,7 +87,6 @@ type NewTxArgs struct {
 	Init      string
 	Body      string
 }
-
 type TxResponse struct {
 	Hash string
 }
@@ -137,7 +138,7 @@ func (p *EthereumApi) Create(args *NewTxArgs, reply *string) error {
 	if err != nil {
 		return err
 	}
-	result, _ := p.ethp.Create(p.ethp.GetKey().PrivateKey, args.Value, args.Gas, args.GasPrice, args.Init, args.Body)
+	result, _ := p.ethp.Create(p.ethp.GetKey().PrivateKey, args.Value, args.Gas, args.GasPrice, args.Body)
 	*reply = NewSuccessRes(result)
 	return nil
 }
@@ -174,8 +175,71 @@ func (p *EthereumApi) GetStorageAt(args *GetStorageArgs, reply *string) error {
 		return err
 	}
 	state := p.ethp.GetStateObject(args.Address)
-	value := state.GetStorage(args.Key)
+	// Convert the incoming string (which is a bigint) into hex
+	i, _ := new(big.Int).SetString(args.Key, 10)
+	hx := ethutil.Hex(i.Bytes())
+	value := state.GetStorage(hx)
 	*reply = NewSuccessRes(GetStorageAtRes{Address: args.Address, Key: args.Key, Value: value})
+	return nil
+}
+
+type GetTxCountArgs struct {
+	Address string `json:"address"`
+}
+type GetTxCountRes struct {
+	Nonce int `json:"nonce"`
+}
+
+func (a *GetTxCountArgs) requirements() error {
+	if a.Address == "" {
+		return NewErrorResponse("GetTxCountAt requires an 'address' value as argument")
+	}
+	return nil
+}
+
+type GetPeerCountRes struct {
+	PeerCount int `json:"peerCount"`
+}
+
+func (p *EthereumApi) GetPeerCount(args *interface{}, reply *string) error {
+	*reply = NewSuccessRes(GetPeerCountRes{PeerCount: p.ethp.GetPeerCount()})
+	return nil
+}
+
+type GetListeningRes struct {
+	IsListening bool `json:"isListening"`
+}
+
+func (p *EthereumApi) GetIsListening(args *interface{}, reply *string) error {
+	*reply = NewSuccessRes(GetListeningRes{IsListening: p.ethp.GetIsListening()})
+	return nil
+}
+
+type GetCoinbaseRes struct {
+	Coinbase string `json:"coinbase"`
+}
+
+func (p *EthereumApi) GetCoinbase(args *interface{}, reply *string) error {
+	*reply = NewSuccessRes(GetCoinbaseRes{Coinbase: p.ethp.GetCoinBase()})
+	return nil
+}
+
+type GetMiningRes struct {
+	IsMining bool `json:"isMining"`
+}
+
+func (p *EthereumApi) GetIsMining(args *interface{}, reply *string) error {
+	*reply = NewSuccessRes(GetMiningRes{IsMining: p.ethp.GetIsMining()})
+	return nil
+}
+
+func (p *EthereumApi) GetTxCountAt(args *GetTxCountArgs, reply *string) error {
+	err := args.requirements()
+	if err != nil {
+		return err
+	}
+	state := p.ethp.GetTxCountAt(args.Address)
+	*reply = NewSuccessRes(GetTxCountRes{Nonce: state})
 	return nil
 }
 

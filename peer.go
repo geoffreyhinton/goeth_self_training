@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"net"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -18,6 +17,8 @@ import (
 const (
 	// The size of the output buffer for writing messages
 	outputBufferSize = 50
+	// Current protocol version
+	ProtocolVersion = 17
 )
 
 type DiscReason byte
@@ -48,7 +49,7 @@ var discReasonToString = []string{
 }
 
 func (d DiscReason) String() string {
-	if len(discReasonToString) > int(d) {
+	if len(discReasonToString) < int(d) {
 		return "Unknown"
 	}
 
@@ -118,32 +119,39 @@ type Peer struct {
 	// this to prevent receiving false peers.
 	requestedPeerList bool
 
-	host []interface{}
+	host []byte
 	port uint16
 	caps Caps
 
 	pubkey []byte
 
 	// Indicated whether the node is catching up or not
-	catchingUp bool
+	catchingUp      bool
+	diverted        bool
+	blocksRequested int
 
-	Version string
+	version string
+
+	// We use this to give some kind of pingtime to a node, not very accurate, could be improved.
+	pingTime      time.Duration
+	pingStartTime time.Time
 }
 
 func NewPeer(conn net.Conn, ethereum *Ethereum, inbound bool) *Peer {
-	data, _ := ethutil.Config.Db.Get([]byte("KeyRing"))
-	pubkey := ethutil.NewValueFromBytes(data).Get(2).Bytes()
+	pubkey := ethutil.GetKeyRing().Get(0).PublicKey[1:]
 
 	return &Peer{
-		outputQueue: make(chan *ethwire.Msg, outputBufferSize),
-		quit:        make(chan bool),
-		ethereum:    ethereum,
-		conn:        conn,
-		inbound:     inbound,
-		disconnect:  0,
-		connected:   1,
-		port:        30303,
-		pubkey:      pubkey,
+		outputQueue:     make(chan *ethwire.Msg, outputBufferSize),
+		quit:            make(chan bool),
+		ethereum:        ethereum,
+		conn:            conn,
+		inbound:         inbound,
+		disconnect:      0,
+		connected:       1,
+		port:            30303,
+		pubkey:          pubkey,
+		blocksRequested: 10,
+		caps:            ethereum.ServerCaps(),
 	}
 }
 
@@ -157,7 +165,7 @@ func NewOutboundPeer(addr string, ethereum *Ethereum, caps Caps) *Peer {
 		connected:   0,
 		disconnect:  0,
 		caps:        caps,
-		Version:     fmt.Sprintf("/Ethereum(G) v%s/%s", ethutil.Config.Ver, runtime.GOOS),
+		version:     ethutil.Config.ClientString,
 	}
 
 	// Set up the connection in another goroutine so we don't block the main thread
@@ -181,8 +189,42 @@ func NewOutboundPeer(addr string, ethereum *Ethereum, caps Caps) *Peer {
 	return p
 }
 
+// Getters
+func (p *Peer) PingTime() string {
+	return p.pingTime.String()
+}
+func (p *Peer) Inbound() bool {
+	return p.inbound
+}
+func (p *Peer) LastSend() time.Time {
+	return p.lastSend
+}
+func (p *Peer) LastPong() int64 {
+	return p.lastPong
+}
+func (p *Peer) Host() []byte {
+	return p.host
+}
+func (p *Peer) Port() uint16 {
+	return p.port
+}
+func (p *Peer) Version() string {
+	return p.version
+}
+func (p *Peer) Connected() *int32 {
+	return &p.connected
+}
+
+// Setters
+func (p *Peer) SetVersion(version string) {
+	p.version = version
+}
+
 // Outputs any RLP encoded data to the peer
 func (p *Peer) QueueMessage(msg *ethwire.Msg) {
+	if atomic.LoadInt32(&p.connected) != 1 {
+		return
+	}
 	p.outputQueue <- msg
 }
 
@@ -212,7 +254,7 @@ func (p *Peer) writeMessage(msg *ethwire.Msg) {
 // Outbound message handler. Outbound messages are handled here
 func (p *Peer) HandleOutbound() {
 	// The ping timer. Makes sure that every 2 minutes a ping is send to the peer
-	pingTimer := time.NewTicker(2 * time.Minute)
+	pingTimer := time.NewTicker(30 * time.Second)
 	serviceTimer := time.NewTicker(5 * time.Minute)
 
 out:
@@ -221,12 +263,12 @@ out:
 		// Main message queue. All outbound messages are processed through here
 		case msg := <-p.outputQueue:
 			p.writeMessage(msg)
-
 			p.lastSend = time.Now()
 
 		// Ping timer sends a ping to the peer each 2 minutes
 		case <-pingTimer.C:
 			p.writeMessage(ethwire.NewMessage(ethwire.MsgPingTy, ""))
+			p.pingStartTime = time.Now()
 
 		// Service timer takes care of peer broadcasting, transaction
 		// posting or block posting
@@ -256,11 +298,10 @@ clean:
 
 // Inbound handler. Inbound messages are received here and passed to the appropriate methods
 func (p *Peer) HandleInbound() {
-
 	for atomic.LoadInt32(&p.disconnect) == 0 {
+
 		// HMM?
 		time.Sleep(500 * time.Millisecond)
-
 		// Wait for a message from the peer
 		msgs, err := ethwire.ReadMessages(p.conn)
 		if err != nil {
@@ -286,18 +327,57 @@ func (p *Peer) HandleInbound() {
 				// last pong so the peer handler knows this peer is still
 				// active.
 				p.lastPong = time.Now().Unix()
+				p.pingTime = time.Now().Sub(p.pingStartTime)
 			case ethwire.MsgBlockTy:
 				// Get all blocks and process them
 				var block, lastBlock *ethchain.Block
 				var err error
+
+				// Make sure we are actually receiving anything
+				if msg.Data.Len()-1 > 1 && p.diverted {
+					// We requested blocks and now we need to make sure we have a common ancestor somewhere in these blocks so we can find
+					// common ground to start syncing from
+					lastBlock = ethchain.NewBlockFromRlpValue(msg.Data.Get(msg.Data.Len() - 1))
+					ethutil.Config.Log.Infof("[PEER] Last block: %x. Checking if we have it locally.\n", lastBlock.Hash())
+					for i := msg.Data.Len() - 1; i >= 0; i-- {
+						block = ethchain.NewBlockFromRlpValue(msg.Data.Get(i))
+						// Do we have this block on our chain? If so we can continue
+						if !p.ethereum.StateManager().BlockChain().HasBlock(block.Hash()) {
+							// We don't have this block, but we do have a block with the same prevHash, diversion time!
+							if p.ethereum.StateManager().BlockChain().HasBlockWithPrevHash(block.PrevHash) {
+								p.diverted = false
+								if !p.ethereum.StateManager().BlockChain().FindCanonicalChainFromMsg(msg, block.PrevHash) {
+									p.SyncWithPeerToLastKnown()
+								}
+								break
+							}
+						}
+					}
+					if !p.ethereum.StateManager().BlockChain().HasBlock(lastBlock.Hash()) {
+						// If we can't find a common ancenstor we need to request more blocks.
+						// FIXME: At one point this won't scale anymore since we are not asking for an offset
+						// we just keep increasing the amount of blocks.
+						p.blocksRequested = p.blocksRequested * 2
+
+						ethutil.Config.Log.Infof("[PEER] No common ancestor found, requesting %d more blocks.\n", p.blocksRequested)
+						p.catchingUp = false
+						p.FindCommonParentBlock()
+						break
+					}
+				}
+
 				for i := msg.Data.Len() - 1; i >= 0; i-- {
 					block = ethchain.NewBlockFromRlpValue(msg.Data.Get(i))
-					err = p.ethereum.BlockManager.ProcessBlock(block)
+
+					//p.ethereum.StateManager().PrepareDefault(block)
+					//state := p.ethereum.StateManager().CurrentState()
+					err = p.ethereum.StateManager().Process(block, false)
 
 					if err != nil {
 						if ethutil.Config.Debug {
 							ethutil.Config.Log.Infof("[PEER] Block %x failed\n", block.Hash())
 							ethutil.Config.Log.Infof("[PEER] %v\n", err)
+							ethutil.Config.Log.Debugln(block)
 						}
 						break
 					} else {
@@ -305,33 +385,44 @@ func (p *Peer) HandleInbound() {
 					}
 				}
 
+				if msg.Data.Len() == 0 {
+					// Set catching up to false if
+					// the peer has nothing left to give
+					p.catchingUp = false
+				}
+
 				if err != nil {
 					// If the parent is unknown try to catch up with this peer
 					if ethchain.IsParentErr(err) {
-						ethutil.Config.Log.Infoln("Attempting to catch up")
+						ethutil.Config.Log.Infoln("Attempting to catch up since we don't know the parent")
 						p.catchingUp = false
-						p.CatchupWithPeer()
+						p.CatchupWithPeer(p.ethereum.BlockChain().CurrentBlock.Hash())
 					} else if ethchain.IsValidationErr(err) {
-						// TODO
+						fmt.Println("Err:", err)
+						p.catchingUp = false
 					}
 				} else {
-					// XXX Do we want to catch up if there were errors?
 					// If we're catching up, try to catch up further.
 					if p.catchingUp && msg.Data.Len() > 1 {
-						if ethutil.Config.Debug && lastBlock != nil {
+						if lastBlock != nil {
 							blockInfo := lastBlock.BlockInfo()
-							ethutil.Config.Log.Infof("Synced to block height #%d %x %x\n", blockInfo.Number, lastBlock.Hash(), blockInfo.Hash)
+							ethutil.Config.Log.Debugf("Synced to block height #%d %x %x\n", blockInfo.Number, lastBlock.Hash(), blockInfo.Hash)
 						}
+
 						p.catchingUp = false
-						p.CatchupWithPeer()
+
+						hash := p.ethereum.BlockChain().CurrentBlock.Hash()
+						p.CatchupWithPeer(hash)
 					}
 				}
+
 			case ethwire.MsgTxTy:
 				// If the message was a transaction queue the transaction
 				// in the TxPool where it will undergo validation and
 				// processing when a new block is found
 				for i := 0; i < msg.Data.Len(); i++ {
-					p.ethereum.TxPool.QueueTransaction(ethchain.NewTransactionFromData(msg.Data.Get(i).Encode()))
+					tx := ethchain.NewTransactionFromValue(msg.Data.Get(i))
+					p.ethereum.TxPool().QueueTransaction(tx)
 				}
 			case ethwire.MsgGetPeersTy:
 				// Flag this peer as a 'requested of new peers' this to
@@ -342,22 +433,22 @@ func (p *Peer) HandleInbound() {
 			case ethwire.MsgPeersTy:
 				// Received a list of peers (probably because MsgGetPeersTy was send)
 				// Only act on message if we actually requested for a peers list
-				//if p.requestedPeerList {
-				data := msg.Data
-				// Create new list of possible peers for the ethereum to process
-				peers := make([]string, data.Len())
-				// Parse each possible peer
-				for i := 0; i < data.Len(); i++ {
-					value := data.Get(i)
-					peers[i] = unpackAddr(value.Get(0), value.Get(1).Uint())
+				if p.requestedPeerList {
+					data := msg.Data
+					// Create new list of possible peers for the ethereum to process
+					peers := make([]string, data.Len())
+					// Parse each possible peer
+					for i := 0; i < data.Len(); i++ {
+						value := data.Get(i)
+						peers[i] = unpackAddr(value.Get(0), value.Get(1).Uint())
+					}
+
+					// Connect to the list of peers
+					p.ethereum.ProcessPeerList(peers)
+					// Mark unrequested again
+					p.requestedPeerList = false
+
 				}
-
-				// Connect to the list of peers
-				p.ethereum.ProcessPeerList(peers)
-				// Mark unrequested again
-				p.requestedPeerList = false
-
-				//}
 			case ethwire.MsgGetChainTy:
 				var parent *ethchain.Block
 				// Length minus one since the very last element in the array is a count
@@ -370,29 +461,56 @@ func (p *Peer) HandleInbound() {
 				// Amount of parents in the canonical chain
 				//amountOfBlocks := msg.Data.Get(l).AsUint()
 				amountOfBlocks := uint64(100)
+
 				// Check each SHA block hash from the message and determine whether
 				// the SHA is in the database
 				for i := 0; i < l; i++ {
-					if data := msg.Data.Get(i).Bytes(); p.ethereum.BlockManager.BlockChain().HasBlock(data) {
-						parent = p.ethereum.BlockManager.BlockChain().GetBlock(data)
+					if data := msg.Data.Get(i).Bytes(); p.ethereum.StateManager().BlockChain().HasBlock(data) {
+						parent = p.ethereum.BlockChain().GetBlock(data)
 						break
 					}
 				}
 
 				// If a parent is found send back a reply
 				if parent != nil {
-					chain := p.ethereum.BlockManager.BlockChain().GetChainFromHash(parent.Hash(), amountOfBlocks)
-					p.QueueMessage(ethwire.NewMessage(ethwire.MsgBlockTy, chain))
+					ethutil.Config.Log.Debugf("[PEER] Found canonical block, returning chain from: %x ", parent.Hash())
+					chain := p.ethereum.BlockChain().GetChainFromHash(parent.Hash(), amountOfBlocks)
+					if len(chain) > 0 {
+						//ethutil.Config.Log.Debugf("[PEER] Returning %d blocks: %x ", len(chain), parent.Hash())
+						p.QueueMessage(ethwire.NewMessage(ethwire.MsgBlockTy, chain))
+					} else {
+						p.QueueMessage(ethwire.NewMessage(ethwire.MsgBlockTy, []interface{}{}))
+					}
+
 				} else {
+					//ethutil.Config.Log.Debugf("[PEER] Could not find a similar block")
 					// If no blocks are found we send back a reply with msg not in chain
 					// and the last hash from get chain
-					lastHash := msg.Data.Get(l - 1)
-					//log.Printf("Sending not in chain with hash %x\n", lastHash.AsRaw())
-					p.QueueMessage(ethwire.NewMessage(ethwire.MsgNotInChainTy, []interface{}{lastHash.Raw()}))
+					if l > 0 {
+						lastHash := msg.Data.Get(l - 1)
+						//log.Printf("Sending not in chain with hash %x\n", lastHash.AsRaw())
+						p.QueueMessage(ethwire.NewMessage(ethwire.MsgNotInChainTy, []interface{}{lastHash.Raw()}))
+					}
 				}
 			case ethwire.MsgNotInChainTy:
-				ethutil.Config.Log.Infof("Not in chain %x\n", msg.Data)
-				// TODO
+				ethutil.Config.Log.Debugf("Not in chain: %x\n", msg.Data.Get(0).Bytes())
+				if p.diverted == true {
+					// If were already looking for a common parent and we get here again we need to go deeper
+					p.blocksRequested = p.blocksRequested * 2
+				}
+				p.diverted = true
+				p.catchingUp = false
+				p.FindCommonParentBlock()
+			case ethwire.MsgGetTxsTy:
+				// Get the current transactions of the pool
+				txs := p.ethereum.TxPool().CurrentTransactions()
+				// Get the RlpData values from the txs
+				txsInterface := make([]interface{}, len(txs))
+				for i, tx := range txs {
+					txsInterface[i] = tx.RlpData()
+				}
+				// Broadcast it back to the peer
+				p.QueueMessage(ethwire.NewMessage(ethwire.MsgTxTy, txsInterface))
 
 				// Unofficial but fun nonetheless
 			case ethwire.MsgTalkTy:
@@ -400,31 +518,7 @@ func (p *Peer) HandleInbound() {
 			}
 		}
 	}
-
 	p.Stop()
-}
-
-func packAddr(address, port string) ([]interface{}, uint16) {
-	addr := strings.Split(address, ".")
-	a, _ := strconv.Atoi(addr[0])
-	b, _ := strconv.Atoi(addr[1])
-	c, _ := strconv.Atoi(addr[2])
-	d, _ := strconv.Atoi(addr[3])
-	host := []interface{}{int32(a), int32(b), int32(c), int32(d)}
-	prt, _ := strconv.Atoi(port)
-
-	return host, uint16(prt)
-}
-
-func unpackAddr(value *ethutil.Value, p uint64) string {
-	a := strconv.Itoa(int(value.Get(0).Uint()))
-	b := strconv.Itoa(int(value.Get(1).Uint()))
-	c := strconv.Itoa(int(value.Get(2).Uint()))
-	d := strconv.Itoa(int(value.Get(3).Uint()))
-	host := strings.Join([]string{a, b, c, d}, ".")
-	port := strconv.Itoa(int(p))
-
-	return net.JoinHostPort(host, port)
 }
 
 func (p *Peer) Start() {
@@ -446,10 +540,14 @@ func (p *Peer) Start() {
 		return
 	}
 
-	// Run the outbound handler in a new goroutine
 	go p.HandleOutbound()
 	// Run the inbound handler in a new goroutine
 	go p.HandleInbound()
+
+	// Wait a few seconds for startup and then ask for an initial ping
+	time.Sleep(2 * time.Second)
+	p.writeMessage(ethwire.NewMessage(ethwire.MsgPingTy, ""))
+	p.pingStartTime = time.Now()
 
 }
 
@@ -463,17 +561,22 @@ func (p *Peer) Stop() {
 		p.writeMessage(ethwire.NewMessage(ethwire.MsgDiscTy, ""))
 		p.conn.Close()
 	}
+
+	// Pre-emptively remove the peer; don't wait for reaping. We already know it's dead if we are here
+	p.ethereum.RemovePeer(p)
 }
 
 func (p *Peer) pushHandshake() error {
-	data, _ := ethutil.Config.Db.Get([]byte("KeyRing"))
-	pubkey := ethutil.NewValueFromBytes(data).Get(2).Bytes()
+	keyRing := ethutil.GetKeyRing().Get(0)
+	if keyRing != nil {
+		pubkey := keyRing.PublicKey
 
-	msg := ethwire.NewMessage(ethwire.MsgHandshakeTy, []interface{}{
-		uint32(5), uint32(0), p.Version, byte(p.caps), p.port, pubkey,
-	})
+		msg := ethwire.NewMessage(ethwire.MsgHandshakeTy, []interface{}{
+			uint32(ProtocolVersion), uint32(0), p.version, byte(p.caps), p.port, pubkey[1:],
+		})
 
-	p.QueueMessage(msg)
+		p.QueueMessage(msg)
+	}
 
 	return nil
 }
@@ -482,7 +585,10 @@ func (p *Peer) peersMessage() *ethwire.Msg {
 	outPeers := make([]interface{}, len(p.ethereum.InOutPeers()))
 	// Serialise each peer
 	for i, peer := range p.ethereum.InOutPeers() {
-		outPeers[i] = peer.RlpData()
+		// Don't return localhost as valid peer
+		if !net.ParseIP(peer.conn.RemoteAddr().String()).IsLoopback() {
+			outPeers[i] = peer.RlpData()
+		}
 	}
 
 	// Return the message to the peer with the known list of connected clients
@@ -497,8 +603,8 @@ func (p *Peer) pushPeers() {
 func (p *Peer) handleHandshake(msg *ethwire.Msg) {
 	c := msg.Data
 
-	if c.Get(0).Uint() != 5 {
-		ethutil.Config.Log.Debugln("Invalid peer version. Require protocol v5")
+	if c.Get(0).Uint() != ProtocolVersion {
+		ethutil.Config.Log.Debugln("Invalid peer version. Require protocol:", ProtocolVersion)
 		p.Stop()
 		return
 	}
@@ -512,9 +618,8 @@ func (p *Peer) handleHandshake(msg *ethwire.Msg) {
 		p.port = uint16(c.Get(4).Uint())
 
 		// Self connect detection
-		data, _ := ethutil.Config.Db.Get([]byte("KeyRing"))
-		pubkey := ethutil.NewValueFromBytes(data).Get(2).Bytes()
-		if bytes.Compare(pubkey, p.pubkey) == 0 {
+		keyPair := ethutil.GetKeyRing().Get(0)
+		if bytes.Compare(keyPair.PublicKey, p.pubkey) == 0 {
 			p.Stop()
 
 			return
@@ -522,13 +627,21 @@ func (p *Peer) handleHandshake(msg *ethwire.Msg) {
 
 	}
 
-	// Catch up with the connected peer
-	p.CatchupWithPeer()
-
 	// Set the peer's caps
 	p.caps = Caps(c.Get(3).Byte())
+
 	// Get a reference to the peers version
-	p.Version = c.Get(2).Str()
+	versionString := c.Get(2).Str()
+	if len(versionString) > 0 {
+		p.SetVersion(c.Get(2).Str())
+	}
+
+	// Catch up with the connected peer
+	if !p.ethereum.IsUpToDate() {
+		ethutil.Config.Log.Debugln("Already syncing up with a peer; sleeping")
+		time.Sleep(10 * time.Second)
+	}
+	p.SyncWithPeerToLastKnown()
 
 	ethutil.Config.Log.Debugln("[PEER]", p)
 }
@@ -547,20 +660,75 @@ func (p *Peer) String() string {
 		strConnectType = "disconnected"
 	}
 
-	return fmt.Sprintf("[%s] (%s) %v %s [%s]", strConnectType, strBoundType, p.conn.RemoteAddr(), p.Version, p.caps)
+	return fmt.Sprintf("[%s] (%s) %v %s [%s]", strConnectType, strBoundType, p.conn.RemoteAddr(), p.version, p.caps)
 
 }
+func (p *Peer) SyncWithPeerToLastKnown() {
+	p.catchingUp = false
+	p.CatchupWithPeer(p.ethereum.BlockChain().CurrentBlock.Hash())
+}
 
-func (p *Peer) CatchupWithPeer() {
+func (p *Peer) FindCommonParentBlock() {
+	if p.catchingUp {
+		return
+	}
+
+	p.catchingUp = true
+	if p.blocksRequested == 0 {
+		p.blocksRequested = 20
+	}
+	blocks := p.ethereum.BlockChain().GetChain(p.ethereum.BlockChain().CurrentBlock.Hash(), p.blocksRequested)
+
+	var hashes []interface{}
+	for _, block := range blocks {
+		hashes = append(hashes, block.Hash())
+	}
+
+	msgInfo := append(hashes, uint64(len(hashes)))
+
+	ethutil.Config.Log.Infof("Asking for block from %x (%d total) from %s\n", p.ethereum.BlockChain().CurrentBlock.Hash(), len(hashes), p.conn.RemoteAddr().String())
+
+	msg := ethwire.NewMessage(ethwire.MsgGetChainTy, msgInfo)
+	p.QueueMessage(msg)
+}
+func (p *Peer) CatchupWithPeer(blockHash []byte) {
 	if !p.catchingUp {
+		// Make sure nobody else is catching up when you want to do this
 		p.catchingUp = true
-		msg := ethwire.NewMessage(ethwire.MsgGetChainTy, []interface{}{p.ethereum.BlockManager.BlockChain().CurrentBlock.Hash(), uint64(50)})
+		msg := ethwire.NewMessage(ethwire.MsgGetChainTy, []interface{}{blockHash, uint64(50)})
 		p.QueueMessage(msg)
 
-		ethutil.Config.Log.Debugf("Requesting blockchain %x...\n", p.ethereum.BlockManager.BlockChain().CurrentBlock.Hash()[:4])
+		ethutil.Config.Log.Debugf("Requesting blockchain %x... from peer %s\n", p.ethereum.BlockChain().CurrentBlock.Hash()[:4], p.conn.RemoteAddr())
+
+		msg = ethwire.NewMessage(ethwire.MsgGetTxsTy, []interface{}{})
+		p.QueueMessage(msg)
 	}
 }
 
 func (p *Peer) RlpData() []interface{} {
 	return []interface{}{p.host, p.port, p.pubkey}
+}
+
+func packAddr(address, port string) ([]byte, uint16) {
+	addr := strings.Split(address, ".")
+	a, _ := strconv.Atoi(addr[0])
+	b, _ := strconv.Atoi(addr[1])
+	c, _ := strconv.Atoi(addr[2])
+	d, _ := strconv.Atoi(addr[3])
+	host := []byte{byte(a), byte(b), byte(c), byte(d)}
+	prt, _ := strconv.Atoi(port)
+
+	return host, uint16(prt)
+}
+
+func unpackAddr(value *ethutil.Value, p uint64) string {
+	byts := value.Bytes()
+	a := strconv.Itoa(int(byts[0]))
+	b := strconv.Itoa(int(byts[1]))
+	c := strconv.Itoa(int(byts[2]))
+	d := strconv.Itoa(int(byts[3]))
+	host := strings.Join([]string{a, b, c, d}, ".")
+	port := strconv.Itoa(int(p))
+
+	return net.JoinHostPort(host, port)
 }
