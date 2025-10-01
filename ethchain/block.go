@@ -155,6 +155,22 @@ func (block *Block) PayFee(addr []byte, fee *big.Int) bool {
 	return true
 }
 
+func (block *Block) CalcGasLimit(parent *Block) *big.Int {
+	if block.Number == big.NewInt(0) {
+		return ethutil.BigPow(10, 6)
+	}
+	previous := new(big.Int).Mul(big.NewInt(1023), parent.GasLimit)
+	current := new(big.Rat).Mul(new(big.Rat).SetInt(block.GasUsed), big.NewRat(6, 5))
+	curInt := new(big.Int).Div(current.Num(), current.Denom())
+
+	result := new(big.Int).Add(previous, curInt)
+	result.Div(result, big.NewInt(1024))
+
+	min := ethutil.BigPow(10, 4)
+
+	return ethutil.BigMax(min, result)
+}
+
 func (block *Block) BlockInfo() BlockInfo {
 	bi := BlockInfo{}
 	data, _ := ethutil.Config.Db.Get(append(block.Hash(), []byte("Info")...))
