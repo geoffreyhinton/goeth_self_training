@@ -2,6 +2,7 @@ package ethchain
 
 import (
 	"fmt"
+	"math/big"
 )
 
 // Parent error. In case a parent is unknown this error will be thrown
@@ -48,6 +49,23 @@ type NonceErr struct {
 	Is, Exp uint64
 }
 
+type GasLimitErr struct {
+	Message string
+	IS, Max *big.Int
+}
+
+func IsGasLimitErr(err error) bool {
+	_, ok := err.(*GasLimitErr)
+
+	return ok
+
+}
+func (err *GasLimitErr) Error() string {
+	return err.Message
+}
+func GasLimitError(is, max *big.Int) *GasLimitErr {
+	return &GasLimitErr{Message: fmt.Sprintf("GasLimit error. Max %s, transaction would take it to %s", max, is), IS: is, Max: max}
+}
 func (err *NonceErr) Error() string {
 	return err.Message
 }

@@ -115,6 +115,8 @@ func (sm *StateManager) ApplyTransactions(state *State, block *Block, txs []*Tra
 	// Process each transaction/contract
 	var receipts []*Receipt
 	var validTxs []*Transaction
+	var ignoredTxs []*Transaction
+
 	totalUsedGas := big.NewInt(0)
 	for _, tx := range txs {
 		usedGas, err := sm.ApplyTransaction(state, block, tx)
@@ -122,7 +124,11 @@ func (sm *StateManager) ApplyTransactions(state *State, block *Block, txs []*Tra
 			if IsNonceErr(err) {
 				continue
 			}
-
+			if IsGasLimitErr(err) {
+				ignoredTxs = append(ignoredTxs, tx)
+				ethutil.Config.Log.Debugln("Gaslimit:", err)
+				continue
+			}
 			ethutil.Config.Log.Infoln(err)
 		}
 
