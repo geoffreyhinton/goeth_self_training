@@ -159,6 +159,7 @@ func (sm *StateManager) ApplyTransaction(state *State, block *Block, tx *Transac
 		script      []byte
 	)
 	totalGasUsed = big.NewInt(0)
+	snappshot := state.Snapshot()
 
 	// Apply the transaction to the current state
 	gas, err = sm.Ethereum.TxPool().ProcessTransaction(tx, state, false)
@@ -198,6 +199,13 @@ func (sm *StateManager) ApplyTransaction(state *State, block *Block, tx *Transac
 		}
 	}
 
+	parent := sm.bc.GetBlock(block.PrevHash)
+	total := new(big.Int).Add(block.GasUsed, totalGasUsed)
+	limit := block.CalcGasLimit(parent)
+	if total.Cmp(limit) > 0 {
+		state.Revert(snappshot)
+		err = GasLimitError(total, limit)
+	}
 	return
 }
 
