@@ -19,7 +19,6 @@ var (
 )
 
 // Currency to string
-//
 // Returns a string representing a human readable format
 func CurrencyToString(num *big.Int) string {
 	switch {
