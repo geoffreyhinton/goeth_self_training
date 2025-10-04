@@ -156,7 +156,7 @@ func (block *Block) PayFee(addr []byte, fee *big.Int) bool {
 }
 
 func (block *Block) CalcGasLimit(parent *Block) *big.Int {
-	if block.Number == big.NewInt(0) {
+	if block.Number.Cmp(big.NewInt(0)) == 0 {
 		return ethutil.BigPow(10, 6)
 	}
 	previous := new(big.Int).Mul(big.NewInt(1023), parent.GasLimit)

@@ -138,7 +138,8 @@ func (sm *StateManager) ApplyTransactions(state *State, block *Block, txs []*Tra
 		receipts = append(receipts, receipt)
 		validTxs = append(validTxs, tx)
 	}
-
+	// Update the total gas used for the block (to be mined)
+	block.GasUsed = totalUsedGas
 	return receipts, validTxs
 }
 
