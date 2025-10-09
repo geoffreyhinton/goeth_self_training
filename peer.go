@@ -18,7 +18,7 @@ const (
 	// The size of the output buffer for writing messages
 	outputBufferSize = 50
 	// Current protocol version
-	ProtocolVersion = 17
+	ProtocolVersion = 20
 	// Interval for ping/pong message
 	pingPongTimer = 30 * time.Second
 )
@@ -613,7 +613,8 @@ func (p *Peer) handleHandshake(msg *ethwire.Msg) {
 	c := msg.Data
 
 	if c.Get(0).Uint() != ProtocolVersion {
-		ethutil.Config.Log.Debugln("Invalid peer version. Require protocol:", ProtocolVersion)
+		// ethutil.Config.Log.Debugln("Invalid peer version. Require protocol:", ProtocolVersion)
+		ethutil.Config.Log.Debugf("Invalid peer version %d. Require protocol: %d\n", c.Get(0).Uint(), ProtocolVersion)
 		p.Stop()
 		return
 	}
